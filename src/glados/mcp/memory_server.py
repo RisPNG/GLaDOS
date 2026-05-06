@@ -17,7 +17,21 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP
+except ModuleNotFoundError:
+    class FastMCP:  # type: ignore[no-redef]
+        def __init__(self, _name: str) -> None:
+            pass
+
+        def tool(self) -> Any:
+            def decorator(func: Any) -> Any:
+                return func
+
+            return decorator
+
+        def run(self) -> None:
+            raise RuntimeError("mcp package is required to run the memory MCP server")
 
 logger.remove()
 logging.getLogger().setLevel(logging.CRITICAL)

@@ -7,6 +7,7 @@ approaching token limits. Uses LLM to summarize and extract facts.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -14,7 +15,7 @@ from loguru import logger
 from ..llm_client import LLMConfig
 from ..subagent import Subagent, SubagentConfig, SubagentOutput
 from ..summarization import estimate_tokens, extract_facts, summarize_messages
-from ...mcp.memory_server import Fact, _save_fact
+from ...mcp.memory_server import Fact, Summary, _save_fact, _save_summary
 
 if TYPE_CHECKING:
     from ...core.conversation_store import ConversationStore
@@ -129,6 +130,15 @@ class CompactionAgent(Subagent):
 
         # Build the replacement summary message
         summary_content = f"[summary] Previous conversation summary: {summary}"
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        _save_summary(
+            Summary(
+                content=summary,
+                period="session",
+                start_time=now_iso,
+                end_time=now_iso,
+            )
+        )
 
         # Apply changes to conversation history atomically
         # Get fresh snapshot for building new history to minimize race window

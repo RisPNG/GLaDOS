@@ -30,6 +30,37 @@ def format_current_time_context(now: datetime | None = None) -> str:
     )
 
 
+class SessionClockContext:
+    """Formats session timing for LLM context."""
+
+    def __init__(self, started_at: datetime | None = None) -> None:
+        self.started_at = started_at.astimezone() if started_at is not None else datetime.now().astimezone()
+
+    def as_prompt(self, now: datetime | None = None) -> str:
+        current = now.astimezone() if now is not None else datetime.now().astimezone()
+        elapsed_seconds = max(0, int((current - self.started_at).total_seconds()))
+        return (
+            "[session]\n"
+            "You have access to this conversation session timing through this context.\n"
+            "When asked how long this chat or conversation has been going, answer directly from this context.\n"
+            f"Session started: {self.started_at.isoformat(timespec='seconds')}\n"
+            f"Elapsed session time: {self._format_elapsed(elapsed_seconds)}"
+        )
+
+    @staticmethod
+    def _format_elapsed(total_seconds: int) -> str:
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        parts: list[str] = []
+        if hours:
+            parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+        if minutes:
+            parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+        if seconds or not parts:
+            parts.append(f"{seconds} second{'s' if seconds != 1 else ''}")
+        return ", ".join(parts)
+
+
 @dataclass
 class ContextEntry:
     """A registered context source."""

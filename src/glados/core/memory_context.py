@@ -20,6 +20,7 @@ from loguru import logger
 # Same paths as memory_server.py
 MEMORY_DIR = Path(os.path.expanduser("~/.glados/memory"))
 FACTS_FILE = MEMORY_DIR / "facts.jsonl"
+SUMMARIES_FILE = MEMORY_DIR / "summaries.jsonl"
 
 
 @dataclass
@@ -27,8 +28,9 @@ class MemoryConfig:
     """Configuration for memory context injection."""
 
     enabled: bool = True
-    min_importance: float = 0.7  # Only inject facts above this importance
+    min_importance: float = 0.6  # Only inject facts above this importance
     max_facts: int = 10  # Maximum facts to inject
+    max_summaries: int = 3  # Maximum recent summaries to inject
     include_source: bool = False  # Include source in prompt
     include_age: bool = True  # Include how old the fact is
 
@@ -78,6 +80,29 @@ class MemoryContext:
 
         # Limit
         return filtered[: self._config.max_facts]
+
+    def load_summaries(self) -> list[dict[str, Any]]:
+        """Load all summaries from storage."""
+        if not SUMMARIES_FILE.exists():
+            return []
+
+        summaries = []
+        try:
+            with SUMMARIES_FILE.open("r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        summaries.append(json.loads(line))
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"MemoryContext: failed to load summaries: {e}")
+
+        return summaries
+
+    def get_recent_summaries(self) -> list[dict[str, Any]]:
+        """Get recent conversation summaries."""
+        summaries = self.load_summaries()
+        summaries.sort(key=lambda s: s.get("created_at", 0), reverse=True)
+        return summaries[: self._config.max_summaries]
 
     def format_fact(self, fact: dict[str, Any]) -> str:
         """Format a single fact for the prompt."""
@@ -129,12 +154,21 @@ class MemoryContext:
             return None
 
         facts = self.get_important_facts()
-        if not facts:
+        summaries = self.get_recent_summaries()
+        if not facts and not summaries:
             return None
 
-        lines = ["[memory] Important facts I remember:"]
-        for fact in facts:
-            lines.append(self.format_fact(fact))
+        lines = ["[memory] Long-term memory:"]
+        if facts:
+            lines.append("Important facts:")
+            for fact in facts:
+                lines.append(self.format_fact(fact))
+        if summaries:
+            lines.append("Recent conversation summaries:")
+            for summary in summaries:
+                content = str(summary.get("content", "")).strip()
+                if content:
+                    lines.append(f"- {content}")
 
         return "\n".join(lines)
 

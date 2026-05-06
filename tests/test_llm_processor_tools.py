@@ -4,7 +4,7 @@ import time
 from typing import Any
 
 from glados.autonomy.slots import TaskSlotStore
-from glados.core.context import ContextBuilder, format_current_time_context
+from glados.core.context import ContextBuilder, SessionClockContext, format_current_time_context
 from glados.core.conversation_store import ConversationStore
 from glados.core.llm_processor import LanguageModelProcessor
 
@@ -106,6 +106,19 @@ def test_priority_messages_include_registered_time_context() -> None:
         message["role"] == "system"
         and "[time]" in message["content"]
         and "local system clock" in message["content"]
+        for message in messages
+    )
+
+
+def test_priority_messages_include_registered_session_context() -> None:
+    builder = ContextBuilder()
+    builder.register("session", SessionClockContext().as_prompt)
+    messages = _processor(context_builder=builder)._build_messages(autonomy_mode=False)
+
+    assert any(
+        message["role"] == "system"
+        and "[session]" in message["content"]
+        and "Elapsed session time" in message["content"]
         for message in messages
     )
 
