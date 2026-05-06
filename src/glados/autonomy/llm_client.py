@@ -54,13 +54,7 @@ def llm_call(
     }
 
     if json_response:
-        data.update(
-            {
-                "response_format": {"type": "json_object"},
-                "temperature": 0,
-                "max_tokens": 256,
-            }
-        )
+        data["response_format"] = {"type": "json_object"}
 
     try:
         response = requests.post(
@@ -72,14 +66,13 @@ def llm_call(
         response.raise_for_status()
         result = response.json()
 
+        # Handle OpenAI-style response
         if "choices" in result and result["choices"]:
-            message = result["choices"][0].get("message", {})
-            content = message.get("content")
-            return content if isinstance(content, str) else None
+            return result["choices"][0]["message"]["content"]
 
+        # Handle Ollama-style response
         if "message" in result:
-            content = result["message"].get("content")
-            return content if isinstance(content, str) else None
+            return result["message"].get("content")
 
         logger.warning("LLM call: unexpected response format")
         return None
@@ -88,8 +81,8 @@ def llm_call(
         logger.warning("LLM call timed out")
         return None
     except requests.RequestException as e:
-        logger.warning("LLM call failed: {}", e)
+        logger.warning("LLM call failed: %s", e)
         return None
-    except (json.JSONDecodeError, KeyError, TypeError) as e:
-        logger.warning("LLM call: failed to parse response: {}", e)
+    except (json.JSONDecodeError, KeyError) as e:
+        logger.warning("LLM call: failed to parse response: %s", e)
         return None

@@ -15,14 +15,14 @@ Glados:
   announcement: "All neural network modules are now loaded. System Operational."
 
   autonomy:
-    enabled: true
-    tick_interval_s: 30
-    cooldown_s: 60
-    autonomy_parallel_calls: 1
-    autonomy_queue_max: 4
+    enabled: false
+    tick_interval_s: 10
+    cooldown_s: 20
+    autonomy_parallel_calls: 2
+    autonomy_queue_max: null
     coalesce_ticks: true
     jobs:
-      enabled: true
+      enabled: false
       poll_interval_s: 1
       hacker_news:
         enabled: false
@@ -30,11 +30,11 @@ Glados:
         top_n: 5
         min_score: 200
       weather:
-        enabled: true
+        enabled: false
         interval_s: 3600
-        latitude: 3.1390
-        longitude: 101.6869
-        timezone: "Asia/Kuala_Lumpur"
+        latitude: null
+        longitude: null
+        timezone: "auto"
         temp_change_c: 4
         wind_alert_kmh: 40
 
