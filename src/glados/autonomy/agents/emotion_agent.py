@@ -182,7 +182,8 @@ Keep values between -1 and +1. Consider time elapsed for mood drift toward basel
             data = json.loads(response)
             return EmotionState.from_dict(data)
         except (json.JSONDecodeError, KeyError) as e:
-            logger.warning("EmotionAgent: failed to parse LLM response: %s", e)
+            logger.warning("EmotionAgent: failed to parse LLM response: {}", e)
+            logger.debug("EmotionAgent: raw LLM response was: {}", response)
             return None
 
     @property

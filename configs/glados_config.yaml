@@ -14,23 +14,15 @@ Glados:
   voice: "glados"
   announcement: "All neural network modules are now loaded. System Operational."
 
-  vision:
-    model_dir: null
-    camera_index: 0
-    capture_interval_seconds: 5.0
-    resolution: 384
-    scene_change_threshold: 0.05
-    max_tokens: 64
-
   autonomy:
-    enabled: false
-    tick_interval_s: 10
-    cooldown_s: 20
-    autonomy_parallel_calls: 2
-    autonomy_queue_max: null
+    enabled: true
+    tick_interval_s: 30
+    cooldown_s: 60
+    autonomy_parallel_calls: 1
+    autonomy_queue_max: 4
     coalesce_ticks: true
     jobs:
-      enabled: false
+      enabled: true
       poll_interval_s: 1
       hacker_news:
         enabled: false
@@ -38,11 +30,11 @@ Glados:
         top_n: 5
         min_score: 200
       weather:
-        enabled: false
+        enabled: true
         interval_s: 3600
-        latitude: null
-        longitude: null
-        timezone: "auto"
+        latitude: 3.1390
+        longitude: 101.6869
+        timezone: "Asia/Kuala_Lumpur"
         temp_change_c: 4
         wind_alert_kmh: 40
 

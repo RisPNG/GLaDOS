@@ -81,8 +81,8 @@ def llm_call(
         logger.warning("LLM call timed out")
         return None
     except requests.RequestException as e:
-        logger.warning("LLM call failed: %s", e)
+        logger.warning("LLM call failed: {}", e)
         return None
     except (json.JSONDecodeError, KeyError) as e:
-        logger.warning("LLM call: failed to parse response: %s", e)
+        logger.warning("LLM call: failed to parse response: {}", e)
         return None

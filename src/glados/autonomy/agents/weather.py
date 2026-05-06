@@ -124,7 +124,7 @@ class WeatherSubagent(Subagent):
                 if decision.reason:
                     alerts.append(decision.reason)
             except LLMDecisionError as e:
-                logger.warning("WeatherSubagent: LLM decision failed, using fallback: %s", e)
+                logger.warning("WeatherSubagent: LLM decision failed, using fallback: {}", e)
                 notify_user, importance, alerts = self._fallback_heuristics(code, condition, wind, temp)
         else:
             # No LLM config - use fallback heuristics
@@ -202,7 +202,7 @@ class WeatherSubagent(Subagent):
         if daily_max and daily_min and len(daily_max) >= 3:
             lines.append("### 3-Day Outlook")
             for i in range(min(3, len(daily_max))):
-                date_str = daily_dates[i] if i < len(daily_dates) else f"Day {i+1}"
+                date_str = daily_dates[i] if i < len(daily_dates) else f"Day {i + 1}"
                 d_max = daily_max[i]
                 d_min = daily_min[i]
                 d_code = daily_codes[i] if i < len(daily_codes) else -1
@@ -231,11 +231,15 @@ class WeatherSubagent(Subagent):
             response.raise_for_status()
             return response.json()
         except Exception as exc:
-            logger.warning("WeatherSubagent: failed to fetch weather: %s", exc)
+            logger.warning("WeatherSubagent: failed to fetch weather: {}", exc)
             return None
 
     def _fallback_heuristics(
-        self, code: int, condition: str, wind: float, temp: float
+        self,
+        code: int,
+        condition: str,
+        wind: float,
+        temp: float,
     ) -> tuple[bool, float, list[str]]:
         """Fallback heuristics when LLM is unavailable."""
         notify_user = False
