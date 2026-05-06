@@ -315,6 +315,37 @@ class LanguageModelProcessor:
     @staticmethod
     def _filter_tools_for_message(tools: list[dict[str, Any]], content: str) -> list[dict[str, Any]]:
         text = content.casefold()
+        wants_preference_set = any(
+            phrase in text
+            for phrase in (
+                "remember that",
+                "remember i",
+                "remember my",
+                "don't forget",
+                "do not forget",
+                "keep in mind",
+                "note that",
+                "save that",
+                "my preference",
+                "i prefer",
+                "i dislike",
+                "i don't like",
+                "my favorite",
+                "my favourite",
+                "call me",
+                "from now on",
+            )
+        )
+        wants_preference_get = any(
+            phrase in text
+            for phrase in (
+                "preferences",
+                "my prefs",
+                "what do you remember",
+                "what have you remembered",
+                "what do you know about me",
+            )
+        )
         wants_system = any(
             keyword in text
             for keyword in (
@@ -340,12 +371,25 @@ class LanguageModelProcessor:
         filtered: list[dict[str, Any]] = []
         for tool in tools:
             name = tool.get("function", {}).get("name", "")
+            if name == "set_preference" and not wants_preference_set:
+                continue
+            if name == "get_preferences" and not wants_preference_get:
+                continue
             if name == "slow clap" and not wants_clap:
                 continue
             if name.startswith("mcp.") and not wants_system:
                 continue
             filtered.append(tool)
         return filtered
+
+    def _has_reportable_slots(self) -> bool:
+        if not self.slot_store:
+            return False
+        try:
+            return any(bool(getattr(slot, "report", None)) for slot in self.slot_store.list_slots())
+        except Exception as e:
+            logger.warning(f"LLM Processor: Failed to inspect task slots for reports: {e}")
+            return False
 
     def _process_tool_call(
         self,
@@ -606,6 +650,8 @@ class LanguageModelProcessor:
         tools = list(tool_definitions)
         if self.vision_state is None:
             tools = [tool for tool in tools if tool.get("function", {}).get("name") != "vision_look"]
+        if not self._has_reportable_slots():
+            tools = [tool for tool in tools if tool.get("function", {}).get("name") != "get_report"]
         if not autonomy_mode:
             tools = [
                 tool

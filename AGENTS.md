@@ -1,3 +1,11 @@
+The way I run the project is as the following
+"""
+`venv use glados`
+`glados tui`
+`cd "C:\Program Piles\llama.cpp\llama-b8662-bin-win-cuda-13.1-x64"`
+`.\llama-server.exe -hf bartowski/SicariusSicariiStuff_Llama-3.3-8B-Instruct-128K_Abliterated-GGUF:Q4_K_M --host 127.0.0.1 --port 12330 -ngl 99`
+"""
+
 The following is a general rule you have to follow, it may not apply at all times and choose the correct guidelines depending on the instructions.:
 """
 ## Implementation Guidelines

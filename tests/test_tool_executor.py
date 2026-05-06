@@ -1,15 +1,26 @@
-import pytest
-from unittest.mock import Mock, patch, MagicMock
 import json
 import queue
-import sys
 import threading
 import time
-from typing import Any
+from unittest.mock import ANY, Mock
 
 from glados.core.tool_executor import ToolExecutor
-import glados.tools as tools
-from loguru import logger
+
+
+def _make_executor(
+    llm_queue: queue.Queue,
+    tool_calls_queue: queue.Queue,
+    processing_active_event: threading.Event,
+    shutdown_event: threading.Event,
+) -> ToolExecutor:
+    return ToolExecutor(
+        llm_queue_priority=llm_queue,
+        llm_queue_autonomy=queue.Queue(),
+        tool_calls_queue=tool_calls_queue,
+        processing_active_event=processing_active_event,
+        shutdown_event=shutdown_event,
+    )
+
 
 def test_run_shutdown_event(caplog):
     """
@@ -20,7 +31,7 @@ def test_run_shutdown_event(caplog):
     processing_active_event = threading.Event()
     shutdown_event = threading.Event()
     shutdown_event.set()
-    executor = ToolExecutor(llm_queue, tool_calls_queue, processing_active_event, shutdown_event)
+    executor = _make_executor(llm_queue, tool_calls_queue, processing_active_event, shutdown_event)
 
     caplog.set_level("INFO")
     executor.run()
@@ -52,12 +63,7 @@ def test_tool_call_discarded_if_processing_inactive(mocker, caplog):
     processing_active_event = threading.Event()
     shutdown_event = threading.Event()
 
-    executor = ToolExecutor(
-        llm_queue,
-        tool_calls_queue,
-        processing_active_event,
-        shutdown_event
-    )
+    executor = _make_executor(llm_queue, tool_calls_queue, processing_active_event, shutdown_event)
     thread = threading.Thread(target=executor.run)
     thread.start()
 
@@ -83,6 +89,19 @@ def test_process_valid_tool_call(mocker, caplog):
     Test processing of a valid tool call.
     """
     mock_tool_instance = Mock()
+
+    def run_tool(tool_call_id, args):
+        tool_result_queue = mock_tool.call_args.kwargs["llm_queue"]
+        tool_result_queue.put(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": "success",
+                "type": "function_call_output",
+            }
+        )
+
+    mock_tool_instance.run.side_effect = run_tool
     mock_tool = Mock(return_value=mock_tool_instance)
     mocker.patch("glados.core.tool_executor.all_tools", ["test tool"])
     mocker.patch("glados.core.tool_executor.tool_classes", {
@@ -102,18 +121,13 @@ def test_process_valid_tool_call(mocker, caplog):
     processing_active_event.set()
     shutdown_event = threading.Event()
 
-    executor = ToolExecutor(
-        llm_queue,
-        tool_calls_queue,
-        processing_active_event,
-        shutdown_event
-    )
+    executor = _make_executor(llm_queue, tool_calls_queue, processing_active_event, shutdown_event)
     thread = threading.Thread(target=executor.run)
     thread.start()
 
     timeout = 2
     start_time = time.time()
-    expected_message = "ToolExecutor: Interruption signal active, discarding tool call."
+    expected_message = "ToolExecutor: finished test tool"
 
     while time.time() - start_time < timeout:
         if expected_message in caplog.text:
@@ -121,8 +135,15 @@ def test_process_valid_tool_call(mocker, caplog):
         time.sleep(0.1)
 
     assert "ToolExecutor: Received tool call" in caplog.text
-    mock_tool.assert_called_once_with(llm_queue=llm_queue, tool_config={})
+    mock_tool.assert_called_once_with(llm_queue=ANY, tool_config={})
     mock_tool_instance.run.assert_called_once_with(tool_call["id"], json.loads(tool_call["function"]["arguments"]))
+    output = llm_queue.get(timeout=1)
+    assert output["role"] == "tool"
+    assert output["tool_call_id"] == "123"
+    assert output["content"] == "success"
+    assert output["_lane"] == "priority"
+    assert output["_allow_tools"] is False
+    assert "autonomy" not in output
     shutdown_event.set()
     thread.join(timeout=timeout)
     assert not thread.is_alive(), "Thread is still running after the test timeout"
@@ -151,18 +172,13 @@ def test_json_decode_error(mocker, caplog):
     processing_active_event.set()
     shutdown_event = threading.Event()
 
-    executor = ToolExecutor(
-        llm_queue,
-        tool_calls_queue,
-        processing_active_event,
-        shutdown_event
-    )
+    executor = _make_executor(llm_queue, tool_calls_queue, processing_active_event, shutdown_event)
     thread = threading.Thread(target=executor.run)
     thread.start()
 
     timeout = 2
     start_time = time.time()
-    expected_message = "ToolExecutor: Interruption signal active, discarding tool call."
+    expected_message = "ToolExecutor: finished test tool"
 
     while time.time() - start_time < timeout:
         if expected_message in caplog.text:
@@ -170,7 +186,7 @@ def test_json_decode_error(mocker, caplog):
         time.sleep(0.1)
 
     assert "ToolExecutor: Failed to parse non-JSON tool call args: " in caplog.text
-    mock_tool.assert_called_once_with(llm_queue=llm_queue, tool_config={})
+    mock_tool.assert_called_once_with(llm_queue=ANY, tool_config={})
     mock_tool_instance.run.assert_called_once_with(tool_call["id"], {})
     shutdown_event.set()
     thread.join(timeout=timeout)
@@ -200,18 +216,13 @@ def test_unknown_tool(mocker, caplog):
     processing_active_event.set()
     shutdown_event = threading.Event()
 
-    executor = ToolExecutor(
-        llm_queue,
-        tool_calls_queue,
-        processing_active_event,
-        shutdown_event
-    )
+    executor = _make_executor(llm_queue, tool_calls_queue, processing_active_event, shutdown_event)
     thread = threading.Thread(target=executor.run)
     thread.start()
 
     timeout = 2
     start_time = time.time()
-    expected_message = "ToolExecutor: Interruption signal active, discarding tool call."
+    expected_message = "ToolExecutor: error: no tool named unknown tool is available"
 
     while time.time() - start_time < timeout:
         if expected_message in caplog.text:
@@ -220,12 +231,14 @@ def test_unknown_tool(mocker, caplog):
 
     # Check that the error message is logged and the LLM queue is updated
     assert "ToolExecutor: error: no tool named unknown tool is available" in caplog.text
-    assert llm_queue.get() == {
-        "role": "tool",
-        "tool_call_id": "123",
-        "content": "error: no tool named unknown tool is available",
-        "type": "function_call_output"
-    }
+    output = llm_queue.get()
+    assert output["role"] == "tool"
+    assert output["tool_call_id"] == "123"
+    assert output["content"] == "error: no tool named unknown tool is available"
+    assert output["type"] == "function_call_output"
+    assert output["_lane"] == "priority"
+    assert output["_allow_tools"] is False
+    assert isinstance(output["_enqueued_at"], float)
     mock_tool.assert_not_called()
     shutdown_event.set()
     thread.join(timeout=timeout)

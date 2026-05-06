@@ -79,7 +79,7 @@ class ToolExecutor:
                 autonomy_flag = {"autonomy": True} if autonomy_mode else {}
                 base_queue = self.llm_queue_autonomy if autonomy_mode else self.llm_queue_priority
                 lane = "autonomy" if autonomy_mode else "priority"
-                llm_queue = self._wrap_llm_queue(base_queue) if autonomy_mode else base_queue
+                llm_queue = self._wrap_llm_queue(base_queue, lane)
                 if self._observability_bus:
                     self._observability_bus.emit(
                         source="tool",
@@ -245,27 +245,27 @@ class ToolExecutor:
         logger.info("ToolExecutor thread finished.")
 
     @staticmethod
-    def _wrap_llm_queue(llm_queue: queue.Queue[dict[str, Any]]) -> "queue.Queue[dict[str, Any]]":
-        class AutonomyQueue:
+    def _wrap_llm_queue(llm_queue: queue.Queue[dict[str, Any]], lane: str) -> "queue.Queue[dict[str, Any]]":
+        class ToolResultQueue:
             def __init__(self, base_queue: queue.Queue[dict[str, Any]]) -> None:
                 self._base_queue = base_queue
 
             def put(self, item: dict[str, Any]) -> None:
-                if "autonomy" not in item:
+                if lane == "autonomy" and "autonomy" not in item:
                     item = {**item, "autonomy": True}
                 if "_enqueued_at" not in item:
-                    item = {**item, "_enqueued_at": time.time(), "_lane": "autonomy"}
+                    item = {**item, "_enqueued_at": time.time(), "_lane": lane}
                 if item.get("role") == "tool" and "_allow_tools" not in item:
                     item = {**item, "_allow_tools": False}
                 try:
                     self._base_queue.put_nowait(item)
                 except queue.Full:
-                    logger.warning("ToolExecutor: dropped autonomy tool output because LLM queue is full.")
+                    logger.warning("ToolExecutor: dropped {} tool output because LLM queue is full.", lane)
 
             def put_nowait(self, item: dict[str, Any]) -> None:
                 self.put(item)
 
-        return AutonomyQueue(llm_queue)
+        return ToolResultQueue(llm_queue)
 
     @staticmethod
     def _enqueue(

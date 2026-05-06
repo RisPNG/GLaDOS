@@ -108,6 +108,6 @@ class TaskSlotStore:
             if slot.next_run is not None:
                 meta_parts.append(f"next_run={slot.next_run:.0f}")
             meta_text = f" ({', '.join(meta_parts)})" if meta_parts else ""
-            report_hint = " [report available]" if slot.report else ""
-            lines.append(f"- {slot.title}: {slot.status}{summary_text}{meta_text}{report_hint}")
+            report_hint = f' [report available via get_report agent_id="{slot.slot_id}"]' if slot.report else ""
+            lines.append(f"- {slot.title} (id={slot.slot_id}): {slot.status}{summary_text}{meta_text}{report_hint}")
         return {"role": "system", "content": "\n".join(lines)}

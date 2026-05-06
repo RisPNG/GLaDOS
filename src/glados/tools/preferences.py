@@ -25,7 +25,8 @@ set_preference_definition = {
     "function": {
         "name": "set_preference",
         "description": (
-            "Set a user preference. Use this to remember user likes/dislikes. "
+            "Set a user preference only when the user explicitly asks you to remember, save, or use a stable preference. "
+            "Do not use for casual reactions, short acknowledgements, or normal conversation. "
             "Examples: news_topics=['AI', 'science'], news_exclude=['crypto'], weather_units='celsius'"
         ),
         "parameters": {

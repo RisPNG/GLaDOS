@@ -1618,7 +1618,8 @@ class Glados:
         for slot in slots:
             summary = slot.summary.strip()
             summary_text = f" - {summary}" if summary else ""
-            lines.append(f"- {slot.title}: {slot.status}{summary_text}")
+            report_hint = f' [report available via get_report agent_id="{slot.slot_id}"]' if slot.report else ""
+            lines.append(f"- {slot.title} (id={slot.slot_id}): {slot.status}{summary_text}{report_hint}")
         return "\n".join(lines)
 
     def _run_autonomy_ticker(self) -> None:
