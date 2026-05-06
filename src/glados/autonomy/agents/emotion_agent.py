@@ -11,6 +11,7 @@ import json
 import threading
 import time
 from collections import deque
+from typing import Any
 
 from loguru import logger
 
@@ -42,7 +43,9 @@ STATE vs MOOD:
 - Mood (mood_P/mood_A/mood_D) drifts slowly toward state over time
 
 Given events and their timestamps, update the emotional state appropriately.
-Consider the personality traits when determining emotional responses."""
+Consider the personality traits when determining emotional responses.
+
+Return only valid JSON. Do not wrap it in Markdown. Do not explain it."""
 
 
 class EmotionAgent(Subagent):
@@ -82,7 +85,6 @@ class EmotionAgent(Subagent):
             logger.info("EmotionAgent: restored state from memory")
             return EmotionState.from_dict(entry.value)
 
-        # Fresh state with baseline values
         cfg = self._emotion_config
         return EmotionState(
             pleasure=cfg.baseline_pleasure,
@@ -104,23 +106,21 @@ class EmotionAgent(Subagent):
 
     def tick(self) -> SubagentOutput | None:
         """Process events and update emotional state via LLM."""
-        # Drain events
         with self._events_lock:
             events = list(self._events)
             self._events.clear()
 
-        # If no LLM and no events, apply baseline drift
         if not self._llm_config:
             if not events:
                 self._apply_baseline_drift()
             logger.debug("EmotionAgent: no LLM config, applied baseline drift")
         else:
-            # Ask LLM to update state
             new_state = self._ask_llm(events)
             if new_state:
                 self._state = new_state
+            elif not events:
+                self._apply_baseline_drift()
 
-        # Persist state
         self._save_state()
 
         return SubagentOutput(
@@ -131,7 +131,7 @@ class EmotionAgent(Subagent):
         )
 
     def _apply_baseline_drift(self) -> None:
-        """Drift mood toward baseline values when idle (no LLM fallback)."""
+        """Drift mood toward baseline values when idle."""
         cfg = self._emotion_config
         rate = cfg.baseline_drift_rate
 
@@ -144,7 +144,6 @@ class EmotionAgent(Subagent):
         """Ask LLM to compute new emotional state."""
         cfg = self._emotion_config
 
-        # Build user prompt with current state and events
         current = self._state.to_dict()
         state_str = json.dumps({k: round(v, 2) for k, v in current.items() if k != "last_update"})
 
@@ -165,8 +164,17 @@ EVENTS SINCE LAST UPDATE:
 TIME NOW: {time.strftime("%H:%M:%S")}
 TIME SINCE LAST UPDATE: {time.time() - self._state.last_update:.0f}s
 
-Output the new state as JSON with keys: pleasure, arousal, dominance, mood_pleasure, mood_arousal, mood_dominance
-Keep values between -1 and +1. Consider time elapsed for mood drift toward baseline."""
+Return only this JSON object shape:
+{{
+  "pleasure": 0.0,
+  "arousal": 0.0,
+  "dominance": 0.0,
+  "mood_pleasure": 0.0,
+  "mood_arousal": 0.0,
+  "mood_dominance": 0.0
+}}
+
+Keep values between -1 and +1. Do not include Markdown, prose, comments, or code fences."""
 
         response = llm_call(
             self._llm_config,
@@ -176,15 +184,69 @@ Keep values between -1 and +1. Consider time elapsed for mood drift toward basel
         )
 
         if not response:
+            logger.warning("EmotionAgent: LLM returned an empty response; keeping previous emotional state.")
             return None
 
         try:
-            data = json.loads(response)
-            return EmotionState.from_dict(data)
-        except (json.JSONDecodeError, KeyError) as e:
+            data = self._parse_json_response(response)
+            return EmotionState.from_dict(self._normalize_state_data(data))
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             logger.warning("EmotionAgent: failed to parse LLM response: {}", e)
-            logger.debug("EmotionAgent: raw LLM response was: {}", response)
+            logger.warning("EmotionAgent: raw LLM response was: {}", response[:500])
             return None
+
+    def _parse_json_response(self, response: str) -> dict[str, Any]:
+        """Parse a JSON object from a model response, including fenced or prefixed output."""
+        text = response.strip()
+        if not text:
+            raise json.JSONDecodeError("Empty JSON response", response, 0)
+
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start == -1 or end == -1 or end <= start:
+                raise
+            parsed = json.loads(text[start : end + 1])
+
+        if not isinstance(parsed, dict):
+            raise TypeError("Emotion response JSON must be an object")
+
+        return parsed
+
+    def _normalize_state_data(self, data: dict[str, Any]) -> dict[str, float]:
+        """Coerce and clamp emotional state values."""
+        defaults = self._state.to_dict()
+        keys = (
+            "pleasure",
+            "arousal",
+            "dominance",
+            "mood_pleasure",
+            "mood_arousal",
+            "mood_dominance",
+        )
+
+        normalized: dict[str, float] = {}
+        for key in keys:
+            value = data.get(key, defaults.get(key, 0.0))
+            normalized[key] = self._clamp(float(value))
+
+        normalized["last_update"] = time.time()
+        return normalized
+
+    @staticmethod
+    def _clamp(value: float) -> float:
+        """Clamp PAD values to the supported range."""
+        return max(-1.0, min(1.0, value))
 
     @property
     def state(self) -> EmotionState:

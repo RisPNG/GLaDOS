@@ -93,7 +93,6 @@ class WeatherSubagent(Subagent):
         condition = WEATHER_CODES.get(code, f"code {code}")
         summary = f"{condition}, {temp:.1f}C, wind {wind:.0f}km/h"
 
-        # Use LLM to evaluate weather urgency if config available
         alerts: list[str] = []
         if self._llm_config:
             try:
@@ -127,16 +126,13 @@ class WeatherSubagent(Subagent):
                 logger.warning("WeatherSubagent: LLM decision failed, using fallback: {}", e)
                 notify_user, importance, alerts = self._fallback_heuristics(code, condition, wind, temp)
         else:
-            # No LLM config - use fallback heuristics
             notify_user, importance, alerts = self._fallback_heuristics(code, condition, wind, temp)
 
         self._last_temp = temp
         self._last_code = code
 
-        # Generate detailed report when there's something notable
-        report = None
-        if alerts or importance >= 0.5:
-            report = self._generate_report(data, current, temp, wind, humidity, condition, alerts)
+        # Always generate a report so get_report has something useful to return.
+        report = self._generate_report(data, current, temp, wind, humidity, condition, alerts)
 
         return SubagentOutput(
             status="done",
@@ -161,14 +157,16 @@ class WeatherSubagent(Subagent):
         """Generate detailed weather report."""
         lines = ["## Weather Report", ""]
 
-        # Alerts section
         if alerts:
             lines.append("### Alerts")
             for alert in alerts:
                 lines.append(f"- {alert}")
             lines.append("")
+        else:
+            lines.append("### Alerts")
+            lines.append("- No weather alerts are currently active.")
+            lines.append("")
 
-        # Current conditions
         lines.append("### Current Conditions")
         lines.append(f"- **Condition:** {condition}")
         lines.append(f"- **Temperature:** {temp:.1f}C")
@@ -176,7 +174,6 @@ class WeatherSubagent(Subagent):
         lines.append(f"- **Humidity:** {humidity:.0f}%")
         lines.append("")
 
-        # Hourly forecast (next 6 hours)
         hourly = data.get("hourly", {})
         hourly_temps = hourly.get("temperature_2m", [])
         hourly_codes = hourly.get("weather_code", [])
@@ -192,7 +189,6 @@ class WeatherSubagent(Subagent):
                 lines.append(f"- {time_str}: {h_temp:.1f}C, {h_cond}")
             lines.append("")
 
-        # Daily forecast (if available)
         daily = data.get("daily", {})
         daily_max = daily.get("temperature_2m_max", [])
         daily_min = daily.get("temperature_2m_min", [])
