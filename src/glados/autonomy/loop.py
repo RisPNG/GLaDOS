@@ -90,6 +90,13 @@ class AutonomyLoop:
     def _should_skip(self) -> bool:
         if self._currently_speaking_event.is_set():
             return True
+        since_user = self._interaction_state.seconds_since_user()
+        since_assistant = self._interaction_state.seconds_since_assistant()
+        if since_user is not None:
+            if since_assistant is None or since_user < since_assistant:
+                return True
+            if self._config.cooldown_s > 0 and since_user < self._config.cooldown_s:
+                return True
         if self._config.cooldown_s <= 0:
             return False
         return (time.time() - self._last_prompt_ts) < self._config.cooldown_s
@@ -230,4 +237,4 @@ class AutonomyLoop:
             description=description,
         )
         self._emotion_agent.push_event(emotion_event)
-        logger.debug("Pushed vision emotion event: %s", description)
+        logger.debug("Pushed vision emotion event: {}", description)

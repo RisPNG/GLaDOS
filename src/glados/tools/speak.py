@@ -47,6 +47,7 @@ class Speak:
             return
 
         self._tts_queue.put(text)
+        self._tts_queue.put("<EOS>")
         self._send_result(tool_call_id, "success")
 
     def _send_result(self, tool_call_id: str, content: str) -> None:

@@ -408,9 +408,10 @@ class LanguageModelProcessor:
             tool_call.setdefault("type", "function")
             if not tool_call.get("id"):
                 tool_call["id"] = f"toolcall_{uuid.uuid4().hex}"
-        self._conversation_store.append(
-            {"role": "assistant", "index": 0, "tool_calls": tool_calls, "finish_reason": "tool_calls"}
-        )
+        if not autonomy_mode:
+            self._conversation_store.append(
+                {"role": "assistant", "index": 0, "tool_calls": tool_calls, "finish_reason": "tool_calls"}
+            )
         tool_labels = [call.get("function", {}).get("name", "unknown") for call in tool_calls]
         tool_label_text = ", ".join(tool_labels)
         suffix = " (autonomy)" if autonomy_mode else ""
@@ -597,9 +598,15 @@ class LanguageModelProcessor:
 
         return "".join(result), in_thinking, True
 
-    def _build_messages(self, autonomy_mode: bool) -> list[dict[str, Any]]:
+    def _build_messages(
+        self,
+        autonomy_mode: bool,
+        transient_message: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         """Build the message list for the LLM request, injecting context from registered sources."""
         messages = self._conversation_store.snapshot()
+        if transient_message is not None:
+            messages.append(transient_message)
         extra_messages: list[dict[str, Any]] = []
 
         if autonomy_mode and self.autonomy_system_prompt:
@@ -701,6 +708,9 @@ class LanguageModelProcessor:
                     for key, value in llm_input.items()
                     if key != "autonomy" and not key.startswith("_")
                 }
+                if autonomy_mode and llm_message.get("role") == "tool":
+                    logger.debug("LLM Processor: Dropping terminal autonomy tool result.")
+                    continue
                 logger.info(f"LLM Processor: Received input for LLM: '{llm_message}'")
                 if self._observability_bus:
                     message_text = llm_message.get("content", "")
@@ -726,7 +736,8 @@ class LanguageModelProcessor:
                     inflight_guard = True
                 else:
                     inflight_guard = False
-                self._conversation_store.append(llm_message)
+                if not autonomy_mode:
+                    self._conversation_store.append(llm_message)
 
                 allow_tools = bool(llm_input.get("_allow_tools", True))
                 tools = self._build_tools(autonomy_mode) if allow_tools else []
@@ -738,7 +749,10 @@ class LanguageModelProcessor:
                     for tool in tools
                     if tool.get("function", {}).get("name")
                 }
-                base_messages = self._build_messages(autonomy_mode)
+                base_messages = self._build_messages(
+                    autonomy_mode,
+                    transient_message=llm_message if autonomy_mode else None,
+                )
                 data = {
                     "model": self.model_name,
                     "stream": True,

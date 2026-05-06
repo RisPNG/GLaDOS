@@ -5,6 +5,7 @@ import time
 from unittest.mock import ANY, Mock
 
 from glados.core.tool_executor import ToolExecutor
+from glados.tools.speak import Speak
 
 
 def _make_executor(
@@ -243,3 +244,18 @@ def test_unknown_tool(mocker, caplog):
     shutdown_event.set()
     thread.join(timeout=timeout)
     assert not thread.is_alive(), "Thread is still running after the test timeout"
+
+
+def test_speak_tool_sends_eos_after_text():
+    llm_queue = queue.Queue()
+    tts_queue = queue.Queue()
+    tool = Speak(llm_queue=llm_queue, tool_config={"tts_queue": tts_queue})
+
+    tool.run("call_1", {"text": "hello"})
+
+    assert tts_queue.get(timeout=1) == "hello"
+    assert tts_queue.get(timeout=1) == "<EOS>"
+    output = llm_queue.get(timeout=1)
+    assert output["role"] == "tool"
+    assert output["tool_call_id"] == "call_1"
+    assert output["content"] == "success"

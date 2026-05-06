@@ -1,5 +1,6 @@
 import queue
 import threading
+import time
 from typing import Any
 
 from glados.autonomy.slots import TaskSlotStore
@@ -89,3 +90,45 @@ def test_get_preferences_visible_for_explicit_memory_request() -> None:
     )
 
     assert "get_preferences" in _tool_names(tools)
+
+
+def test_autonomy_tool_calls_do_not_pollute_conversation_history() -> None:
+    processor = _processor()
+    tool_call = {"function": {"name": "do_nothing", "arguments": "{}"}, "id": "call_1"}
+
+    processor._process_tool_call([tool_call], autonomy_mode=True, tool_names={"do_nothing"})
+
+    assert processor._conversation_store.snapshot() == []
+    queued = processor.tool_calls_queue.get(timeout=1)
+    assert queued["autonomy"] is True
+    assert queued["function"]["name"] == "do_nothing"
+
+
+def test_autonomy_tool_result_does_not_trigger_followup_llm_call(mocker) -> None:
+    processor = _processor()
+    processor.processing_active_event.set()
+    post_mock = mocker.patch("glados.core.llm_processor.requests.post")
+    processor.llm_input_queue.put(
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "success",
+            "type": "function_call_output",
+            "autonomy": True,
+            "_allow_tools": False,
+        }
+    )
+
+    thread = threading.Thread(target=processor.run)
+    thread.start()
+
+    deadline = time.time() + 2
+    while time.time() < deadline and not processor.llm_input_queue.empty():
+        time.sleep(0.01)
+
+    processor.shutdown_event.set()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    post_mock.assert_not_called()
+    assert processor._conversation_store.snapshot() == []
