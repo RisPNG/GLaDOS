@@ -109,16 +109,18 @@ class EmotionAgent(Subagent):
             events = list(self._events)
             self._events.clear()
 
-        # If no LLM and no events, apply baseline drift
-        if not self._llm_config:
-            if not events:
-                self._apply_baseline_drift()
-            logger.debug("EmotionAgent: no LLM config, applied baseline drift")
+        if not events:
+            self._apply_baseline_drift()
+            logger.debug("EmotionAgent: idle, applied baseline drift")
+        elif not self._llm_config:
+            logger.debug("EmotionAgent: no LLM config, kept current state for {} event(s)", len(events))
         else:
             # Ask LLM to update state
             new_state = self._ask_llm(events)
             if new_state:
                 self._state = new_state
+            else:
+                self._apply_baseline_drift()
 
         # Persist state
         self._save_state()
@@ -178,12 +180,35 @@ Keep values between -1 and +1. Consider time elapsed for mood drift toward basel
         if not response:
             return None
 
-        try:
-            data = json.loads(response)
-            return EmotionState.from_dict(data)
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning("EmotionAgent: failed to parse LLM response: {}", e)
+        data = self._extract_state_json(response)
+        if data is None:
+            logger.debug("EmotionAgent: ignored malformed LLM response")
             return None
+
+        try:
+            return EmotionState.from_dict(data)
+        except (KeyError, TypeError, ValueError) as e:
+            logger.debug("EmotionAgent: ignored invalid LLM state response: {}", e)
+            return None
+
+    @staticmethod
+    def _extract_state_json(response: str) -> dict[str, object] | None:
+        """Extract first JSON object from an LLM response."""
+        text = response.strip()
+        if not text:
+            return None
+
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(text):
+            if char != "{":
+                continue
+            try:
+                candidate, _ = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict):
+                return candidate
+        return None
 
     @property
     def state(self) -> EmotionState:
