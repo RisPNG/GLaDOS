@@ -33,7 +33,7 @@ from ..observability import MindRegistry, ObservabilityBus, trim_message
 from ..vision import VisionConfig, VisionState
 from ..vision.constants import SYSTEM_PROMPT_VISION_HANDLING
 from .audio_data import AudioMessage
-from .context import ContextBuilder
+from .context import ContextBuilder, format_current_time_context
 from .audio_state import AudioState
 from .conversation_store import ConversationStore
 from .knowledge_store import KnowledgeStore
@@ -273,6 +273,7 @@ class Glados:
 
         # Create unified context builder for LLM context injection
         self.context_builder = ContextBuilder()
+        self.context_builder.register("time", format_current_time_context, priority=11)
         self.context_builder.register("preferences", self.preferences_store.as_prompt, priority=10)
         self.context_builder.register("knowledge", lambda: self._format_knowledge(), priority=5)
         self.context_builder.register("constitution", self.constitutional_state.get_modifiers_prompt, priority=3)

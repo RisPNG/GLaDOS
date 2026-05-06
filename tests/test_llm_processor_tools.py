@@ -4,11 +4,15 @@ import time
 from typing import Any
 
 from glados.autonomy.slots import TaskSlotStore
+from glados.core.context import ContextBuilder, format_current_time_context
 from glados.core.conversation_store import ConversationStore
 from glados.core.llm_processor import LanguageModelProcessor
 
 
-def _processor(slot_store: TaskSlotStore | None = None) -> LanguageModelProcessor:
+def _processor(
+    slot_store: TaskSlotStore | None = None,
+    context_builder: ContextBuilder | None = None,
+) -> LanguageModelProcessor:
     return LanguageModelProcessor(
         llm_input_queue=queue.Queue(),
         tool_calls_queue=queue.Queue(),
@@ -20,6 +24,7 @@ def _processor(slot_store: TaskSlotStore | None = None) -> LanguageModelProcesso
         processing_active_event=threading.Event(),
         shutdown_event=threading.Event(),
         slot_store=slot_store,
+        context_builder=context_builder,
     )
 
 
@@ -90,6 +95,19 @@ def test_get_preferences_visible_for_explicit_memory_request() -> None:
     )
 
     assert "get_preferences" in _tool_names(tools)
+
+
+def test_priority_messages_include_registered_time_context() -> None:
+    builder = ContextBuilder()
+    builder.register("time", lambda: format_current_time_context())
+    messages = _processor(context_builder=builder)._build_messages(autonomy_mode=False)
+
+    assert any(
+        message["role"] == "system"
+        and "[time]" in message["content"]
+        and "local system clock" in message["content"]
+        for message in messages
+    )
 
 
 def test_autonomy_tool_calls_do_not_pollute_conversation_history() -> None:

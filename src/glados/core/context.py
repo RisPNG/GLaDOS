@@ -10,9 +10,24 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable
 
 ContextSource = Callable[[], str | None]
+
+
+def format_current_time_context(now: datetime | None = None) -> str:
+    """Format local system time for LLM context."""
+    current = now.astimezone() if now is not None else datetime.now().astimezone()
+    return (
+        "[time]\n"
+        "You have access to the local system clock through this context.\n"
+        "When asked for the current date or time, answer directly from this context.\n"
+        "Do not claim you lack access to local time.\n"
+        f"Current local date: {current:%A, %B %d, %Y}\n"
+        f"Current local time: {current:%I:%M %p %Z}\n"
+        f"ISO timestamp: {current.isoformat(timespec='seconds')}"
+    )
 
 
 @dataclass
