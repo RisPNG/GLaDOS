@@ -321,6 +321,7 @@ See [mcp.md](/docs/mcp.md) for configuration.
    ```bash
    pip install --upgrade pip setuptools wheel
    pip install -e ".[cuda,dev]"
+   pip install -U "onnxruntime-gpu[cuda,cudnn]"
    glados download
    ```
 
