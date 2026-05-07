@@ -310,22 +310,24 @@ See [mcp.md](/docs/mcp.md) for configuration.
 
 > *"The Enrichment Center is required to remind you that the Weighted Companion Cube cannot talk. In the event that it does talk The Enrichment Centre asks you to ignore its advice."  -  GLaDOS*
 
-1. Install [Ollama](https://github.com/ollama/ollama) and grab a model:
-   ```bash
-   ollama pull llama3.2
-   ```
+1. Install llama.cpp and grab a model, please follow the instructions in llama.cpp's README instead.
 
 2. Clone and install:
    ```bash
-   git clone https://github.com/dnhkng/GLaDOS.git
+   git clone https://github.com/rispng/GLaDOS.git
    cd GLaDOS
-   python scripts/install.py
+   ```
+   Then, create and activate a venv based on Python version 3.12, and:
+   ```bash
+   pip install --upgrade pip setuptools wheel
+   pip install -e ".[cuda,dev]"
+   glados download
    ```
 
 3. Run:
    ```bash
-   uv run glados          # Voice mode
-   uv run glados tui      # Text interface
+   glados          # Voice mode
+   glados tui      # Text interface
    ```
 
 ## Installation
