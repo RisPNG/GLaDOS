@@ -52,8 +52,8 @@ MODEL_DETAILS: dict[FileName, dict[FileURL, FileHash]] = {
         "checksum": "c1610a859f3bdea01107e73e50100685af38fff88f5cd8e5c56df109ec880204",
     },
     "models/TTS/kokoro-voices-v1.0.bin": {
-        "url": "https://github.com/dnhkng/GLaDOS/releases/download/0.1/kokoro-voices-v1.0.bin",
-        "checksum": "c5adf5cc911e03b76fa5025c1c225b141310d0c4a721d6ed6e96e73309d0fd88",
+        "url": "https://github.com/nazdridoy/kokoro-tts/releases/download/v1.0.0/voices-v1.0.bin",
+        "checksum": "d19762d46cf0e6648cb28a7711df1637aad15818185d13f4ff840d57f2f6dfed",
     },
     "models/TTS/phomenizer_en.onnx": {
         "url": "https://github.com/dnhkng/GlaDOS/releases/download/0.1/phomenizer_en.onnx",

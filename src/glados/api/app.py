@@ -3,12 +3,12 @@ import io
 from typing import Literal
 
 from litestar import Litestar, post
+from litestar.exceptions import HTTPException
 from litestar.response import Stream
 
 from .log import structlog_plugin
-from .tts import write_glados_audio_file
+from .tts import write_speech_audio_file
 
-Voice = Literal["glados"]
 ResponseFormat = Literal["mp3", "wav", "ogg"]
 
 
@@ -16,7 +16,7 @@ ResponseFormat = Literal["mp3", "wav", "ogg"]
 class RequestData:
     input: str
     model: str = "glados"
-    voice: Voice = "glados"
+    voice: str = "af_heart"
     response_format: ResponseFormat = "mp3"
     speed: float = 1.0
 
@@ -35,10 +35,12 @@ async def create_speech(data: RequestData) -> Stream:
     Returns:
         Stream: Stream of bytes data containing the generated speech
     """
-    # TODO: Handle other voices
     # TODO: Handle speed
     buffer = io.BytesIO()
-    write_glados_audio_file(buffer, data.input, format=data.response_format)
+    try:
+        write_speech_audio_file(buffer, data.input, voice=data.voice, format=data.response_format)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     buffer.seek(0)
     return Stream(
         buffer,

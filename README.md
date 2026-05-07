@@ -428,10 +428,10 @@ Browse models: [ollama.com/library](https://ollama.com/library)
 
 Kokoro voices in `glados_config.yaml`:
 ```yaml
-voice: "af_bella"
+voice: "af_heart"
 ```
 
-**Female US:** af_alloy, af_aoede, af_jessica, af_kore, af_nicole, af_nova, af_river, af_sarah, af_sky
+**Female US:** af_alloy, af_aoede, af_bella, af_heart, af_jessica, af_kore, af_nicole, af_nova, af_river, af_sarah, af_sky
 **Female UK:** bf_alice, bf_emma, bf_isabella, bf_lily
 **Male US:** am_adam, am_echo, am_eric, am_fenrir, am_liam, am_michael, am_onyx, am_puck
 **Male UK:** bm_daniel, bm_fable, bm_george, bm_lewis
@@ -486,7 +486,7 @@ Generate speech:
 ```bash
 curl -X POST http://localhost:5050/v1/audio/speech \
   -H "Content-Type: application/json" \
-  -d '{"input": "Hello.", "voice": "glados"}' \
+  -d '{"input": "Hello.", "voice": "af_heart"}' \
   --output speech.mp3
 ```
 
