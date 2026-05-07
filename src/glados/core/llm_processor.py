@@ -694,7 +694,7 @@ class LanguageModelProcessor:
                     extra_messages.append({"role": "system", "content": modifiers_prompt})
 
         # MCP context is handled separately (returns list of messages)
-        if self.mcp_manager and not finalize_after_tool:
+        if self.mcp_manager:
             try:
                 extra_messages.extend(self.mcp_manager.get_context_messages(block=False))
             except Exception as e:

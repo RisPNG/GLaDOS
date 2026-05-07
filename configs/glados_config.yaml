@@ -15,6 +15,25 @@ Glados:
   voice: "glados"
   announcement: "All neural network modules are now loaded. System Operational."
 
+  vision:
+    camera:
+      enabled: false
+      camera_index: 0
+      capture_interval_seconds: 5
+      resolution: 384
+      scene_change_threshold: 0.05
+      max_tokens: 64
+    screen:
+      enabled: false
+      backend: "mss"
+      analyzer: "fastvlm"
+      monitors: "all"
+      thumbnail_interval_seconds: 1
+      capture_interval_seconds: 5
+      resolution: 384
+      scene_change_threshold: 0.04
+      max_tokens: 128
+
   autonomy:
     enabled: true
     tick_interval_s: 10

@@ -17,12 +17,12 @@ ToolEventCallback = Callable[[str, str], None]
 
 class ToolExecutor:
     """
-
-    _TERMINAL_AUTONOMY_TOOLS = {"speak", "do_nothing"}
     A thread that executes tool calls from the LLM.
     This class is designed to run in a separate thread, continuously checking
     for new tool calls until a shutdown event is set.
     """
+
+    _TERMINAL_AUTONOMY_TOOLS = {"speak", "do_nothing"}
 
     def __init__(
         self,

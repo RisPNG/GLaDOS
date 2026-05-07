@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cuda = ["onnxruntime-gpu>=1.16.0"]
+cuda = ["onnxruntime-gpu[cuda,cudnn]>=1.21.0"]
 cpu = ["onnxruntime>=1.16.0"]
 tiktoken = ["tiktoken>=0.5.0"]
 dev = [

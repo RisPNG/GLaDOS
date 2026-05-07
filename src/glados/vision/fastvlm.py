@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import ctypes
+import os
 from pathlib import Path
+import site
 from typing import Final
 
 import cv2
@@ -17,6 +20,7 @@ from ..utils.resources import resource_path
 
 # Suppress ONNX verbose logging
 ort.set_default_logger_severity(4)
+_DLL_DIRECTORY_HANDLES: list[object] = []
 
 _DEFAULT_SYSTEM_PROMPT: Final[str] = "You are a helpful assistant."
 
@@ -216,6 +220,15 @@ class FastVLM:
         logger.info(f"Loading FastVLM from {model_dir}")
 
         # Configure providers (same pattern as ASR)
+        self._prepare_cuda_dll_paths()
+        preload_dlls = getattr(ort, "preload_dlls", None)
+        if callable(preload_dlls):
+            try:
+                preload_dlls()
+                self._preload_cudnn_frontend_dlls()
+            except Exception as exc:
+                logger.debug("FastVLM: ONNX Runtime DLL preload skipped: {}", exc)
+
         providers = ort.get_available_providers()
         for excluded in ["TensorrtExecutionProvider", "CoreMLExecutionProvider"]:
             if excluded in providers:
@@ -254,24 +267,24 @@ class FastVLM:
         decoder_path = Path(decoder_path)
 
         logger.debug("Loading vision encoder...")
-        self.vision_encoder = ort.InferenceSession(
-            str(vision_encoder_path),
-            sess_options=session_opts,
-            providers=self._providers,
+        self.vision_encoder = self._create_session(
+            vision_encoder_path,
+            session_opts,
+            "vision encoder",
         )
 
         logger.debug("Loading embed tokens...")
-        self.embed_tokens = ort.InferenceSession(
-            str(embed_tokens_path),
-            sess_options=session_opts,
-            providers=self._providers,
+        self.embed_tokens = self._create_session(
+            embed_tokens_path,
+            session_opts,
+            "embed tokens",
         )
 
         logger.debug("Loading decoder...")
-        self.decoder = ort.InferenceSession(
-            str(decoder_path),
-            sess_options=session_opts,
-            providers=self._providers,
+        self.decoder = self._create_session(
+            decoder_path,
+            session_opts,
+            "decoder",
         )
         decoder_input_types = {inp.name: inp.type for inp in self.decoder.get_inputs()}
         self._decoder_embed_dtype = _onnx_type_to_dtype(decoder_input_types.get("inputs_embeds", ""))
@@ -283,6 +296,124 @@ class FastVLM:
         self._load_configs(model_dir)
 
         logger.success(f"FastVLM loaded using {self._providers[0]}")
+
+    def _create_session(
+        self,
+        model_path: Path,
+        session_opts: ort.SessionOptions,
+        label: str,
+    ) -> ort.InferenceSession:
+        """Create an ONNX Runtime session, falling back to CPU if CUDA rejects the model."""
+        try:
+            return ort.InferenceSession(
+                str(model_path),
+                sess_options=session_opts,
+                providers=self._providers,
+            )
+        except Exception as exc:
+            logger.warning(
+                "FastVLM {} failed with providers {}: {}. Retrying with conservative graph optimizations.",
+                label,
+                self._providers,
+                exc,
+            )
+            return self._create_compat_session(model_path, label, exc)
+
+    def _create_compat_session(
+        self,
+        model_path: Path,
+        label: str,
+        original_error: Exception,
+    ) -> ort.InferenceSession:
+        """Retry with conservative options for ORT/model compatibility."""
+        attempts = [
+            ("basic graph optimizations", self._providers, ort.GraphOptimizationLevel.ORT_ENABLE_BASIC),
+            ("graph optimizations disabled", self._providers, ort.GraphOptimizationLevel.ORT_DISABLE_ALL),
+        ]
+        if self._providers != ["CPUExecutionProvider"]:
+            attempts.extend(
+                [
+                    (
+                        "CPU basic graph optimizations",
+                        ["CPUExecutionProvider"],
+                        ort.GraphOptimizationLevel.ORT_ENABLE_BASIC,
+                    ),
+                    (
+                        "CPU graph optimizations disabled",
+                        ["CPUExecutionProvider"],
+                        ort.GraphOptimizationLevel.ORT_DISABLE_ALL,
+                    ),
+                ]
+            )
+
+        last_error = original_error
+        for description, providers, optimization_level in attempts:
+            compat_opts = ort.SessionOptions()
+            compat_opts.graph_optimization_level = optimization_level
+            compat_opts.enable_mem_pattern = False
+            try:
+                session = ort.InferenceSession(
+                    str(model_path),
+                    sess_options=compat_opts,
+                    providers=providers,
+                )
+                self._providers = list(session.get_providers())
+                logger.warning("FastVLM {} loaded with {}.", label, description)
+                return session
+            except Exception as exc:
+                last_error = exc
+                logger.warning("FastVLM {} failed with {}: {}", label, description, exc)
+        raise last_error
+
+    @staticmethod
+    def _prepare_cuda_dll_paths() -> None:
+        if os.name != "nt":
+            return
+
+        candidate_dirs: list[Path] = []
+        for site_dir in site.getsitepackages():
+            nvidia_dir = Path(site_dir) / "nvidia"
+            if not nvidia_dir.exists():
+                continue
+            candidate_dirs.extend(path for path in nvidia_dir.glob("*\\bin") if path.is_dir())
+
+        for path in candidate_dirs:
+            path_text = str(path)
+            if path_text not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = f"{path_text}{os.pathsep}{os.environ.get('PATH', '')}"
+            try:
+                handle = os.add_dll_directory(path_text)
+                _DLL_DIRECTORY_HANDLES.append(handle)
+            except (FileNotFoundError, OSError):
+                continue
+
+    @staticmethod
+    def _preload_cudnn_frontend_dlls() -> None:
+        if os.name != "nt":
+            return
+
+        dll_names = (
+            "cudnn_engines_tensor_ir64_9.dll",
+            "cudnn_engines_runtime_compiled64_9.dll",
+            "cudnn_engines_precompiled64_9.dll",
+            "cudnn_heuristic64_9.dll",
+            "cudnn_graph64_9.dll",
+            "cudnn_ops64_9.dll",
+            "cudnn_adv64_9.dll",
+            "cudnn64_9.dll",
+        )
+        for site_dir in site.getsitepackages():
+            cudnn_bin = Path(site_dir) / "nvidia" / "cudnn" / "bin"
+            if not cudnn_bin.exists():
+                continue
+            for dll_name in dll_names:
+                dll_path = cudnn_bin / dll_name
+                if not dll_path.exists():
+                    continue
+                try:
+                    ctypes.WinDLL(str(dll_path))
+                except OSError as exc:
+                    logger.debug("FastVLM: failed to preload {}: {}", dll_path, exc)
 
     def _load_configs(self, model_dir: Path) -> None:
         """Load tokenizer and preprocessing configs."""
