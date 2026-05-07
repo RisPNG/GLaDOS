@@ -10,7 +10,7 @@ When enabled:
 
 1. Camera and/or screen processors capture frames.
 2. Low-resolution frame differencing detects meaningful changes.
-3. FastVLM generates compact descriptions.
+3. FastVLM, or an OpenAI-compatible VLM server, generates compact descriptions.
 4. `VisionUpdateEvent` triggers autonomy when a scene changes.
 5. The main agent decides whether to speak, stay silent, remember, or call a
    fresh inspection tool.
@@ -54,15 +54,18 @@ vision:
   screen:
     enabled: true
     backend: "mss"
-    analyzer: "fastvlm"
+    analyzer: "fastvlm"              # background watcher
+    tool_analyzer: "openai_compatible" # screen_look only
     model: "bartowski/Qwen_Qwen3.5-4B-GGUF:Q4_K_M"
     completion_url: null
+    tool_completion_url: "http://localhost:12331/v1/chat/completions"
     monitors: "all"
     thumbnail_interval_seconds: 1
     capture_interval_seconds: 5
     resolution: 384
     scene_change_threshold: 0.04
     max_tokens: 128
+    request_timeout_seconds: 60
 ```
 
 Legacy camera-only config is still supported:
@@ -106,13 +109,24 @@ ambiguous visual events, then must finish with `speak` or `do_nothing`.
 multiple monitors. `dxcam` is accepted as an optional Windows backend, but it
 must be installed separately.
 
-Screen vision currently uses FastVLM. The `screen.analyzer`,
-`screen.model`, and `screen.completion_url` fields reserve the integration
-point for a future OpenAI-compatible VLM server such as:
+Screen vision can split background and on-demand analysis:
 
 ```text
-bartowski/Qwen_Qwen3.5-4B-GGUF:Q4_K_M
+screen.analyzer = fastvlm              # cheap passive watcher
+screen.tool_analyzer = openai_compatible # larger screen_look reader
 ```
+
+For Qwen3.5 vision through llama.cpp, run a separate VLM server from your main
+chat server:
+
+```powershell
+cd "C:\Program Piles\llama.cpp\llama-b8662-bin-win-cuda-13.1-x64"
+.\llama-server.exe -hf bartowski/Qwen_Qwen3.5-4B-GGUF:Q4_K_M --host 127.0.0.1 --port 12331 -ngl 99
+```
+
+Then set `screen.tool_completion_url` to
+`http://localhost:12331/v1/chat/completions`. Keep your main chatbot server on
+its current `12330` port.
 
 ## Troubleshooting
 
@@ -127,8 +141,9 @@ Screen capture unavailable:
 
 Poor screen reading:
 - FastVLM is useful for rough screen summaries, but small UI text/OCR may be weak.
-- The intended upgrade path is replacing screen analysis with a stronger VLM
-  endpoint while keeping the same `screen_look` tool contract.
+- Use `tool_analyzer: "openai_compatible"` with a stronger VLM endpoint so
+  `screen_look` can read screenshots more carefully while background watching
+  stays cheap.
 
 ## Implementation Details
 
@@ -137,6 +152,7 @@ Poor screen reading:
 | Camera source | `CameraVisionProcessor`, OpenCV `VideoCapture` |
 | Screen source | `ScreenVisionProcessor`, MSS or optional DXcam |
 | Default analyzer | FastVLM ONNX |
+| On-demand VLM option | OpenAI-compatible `/v1/chat/completions` image input |
 | State format | Source-keyed `VisionState` snapshots |
 | Tools | `camera_look`, `screen_look` |
 | Main LLM requirement | Text-only is enough |

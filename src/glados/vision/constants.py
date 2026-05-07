@@ -25,6 +25,12 @@ SCREEN_DETAIL_PROMPT: Final[str] = (
     "Inspect this desktop screenshot in detail. Read visible errors or important text if possible, "
     "identify active apps/windows, and summarize only useful desktop context."
 )
+SCREEN_OPENAI_SYSTEM_PROMPT: Final[str] = (
+    "You are a desktop screen observer for a companion chatbot. "
+    "Describe only useful visible desktop context. Focus on active apps, visible errors, notifications, "
+    "important text, and user-relevant changes. Ignore wallpaper, clocks, minor UI chrome, and normal typing noise. "
+    "Do not roleplay as the chatbot. Return concise plain text only."
+)
 
 VISION_DEFAULT_PROMPT: Final[str] = CAMERA_DEFAULT_PROMPT
 VISION_DETAIL_PROMPT: Final[str] = CAMERA_DETAIL_PROMPT

@@ -508,7 +508,9 @@ class Glados:
         if self.vision_config:
             needs_fastvlm = "camera" in self.vision_sources
             if self.vision_config.screen and self.vision_config.screen.enabled:
-                needs_fastvlm = needs_fastvlm or self.vision_config.screen.analyzer == "fastvlm"
+                screen_config = self.vision_config.screen
+                needs_fastvlm = needs_fastvlm or screen_config.analyzer == "fastvlm"
+                needs_fastvlm = needs_fastvlm or screen_config.effective_tool_analyzer() == "fastvlm"
             if needs_fastvlm:
                 from ..vision import FastVLM
 

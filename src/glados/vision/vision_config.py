@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -30,7 +31,10 @@ class CameraVisionConfig(BaseModel):
         default=0.05,
         ge=0.0,
         le=1.0,
-        description="Minimum normalized difference between frames to trigger VLM inference. 0=always process, 1=never process.",
+        description=(
+            "Minimum normalized difference between frames to trigger VLM inference. "
+            "0=always process, 1=never process."
+        ),
     )
     max_tokens: int = Field(
         default=64,
@@ -50,15 +54,31 @@ class ScreenVisionConfig(BaseModel):
     )
     analyzer: Literal["fastvlm", "openai_compatible"] = Field(
         default="fastvlm",
-        description="Screen understanding backend. openai_compatible is reserved for a future VLM server.",
+        description="Background screen understanding backend.",
+    )
+    tool_analyzer: Literal["same", "fastvlm", "openai_compatible"] = Field(
+        default="same",
+        description="On-demand screen_look backend. Use 'same' to reuse analyzer.",
     )
     model: str = Field(
         default="bartowski/Qwen_Qwen3.5-4B-GGUF:Q4_K_M",
-        description="Future OpenAI-compatible VLM model id for screen_look.",
+        description="OpenAI-compatible VLM model id for screen vision.",
     )
     completion_url: str | None = Field(
         default=None,
-        description="Future OpenAI-compatible VLM endpoint for screen_look.",
+        description="OpenAI-compatible VLM endpoint for screen vision.",
+    )
+    tool_model: str | None = Field(
+        default=None,
+        description="Optional model id override for screen_look.",
+    )
+    tool_completion_url: str | None = Field(
+        default=None,
+        description="Optional OpenAI-compatible endpoint override for screen_look.",
+    )
+    tool_api_key: str | None = Field(
+        default=None,
+        description="Optional bearer token for the screen_look OpenAI-compatible endpoint.",
     )
     monitors: Literal["all", "primary"] | list[int] = Field(
         default="all",
@@ -91,6 +111,16 @@ class ScreenVisionConfig(BaseModel):
         le=512,
         description="Maximum tokens to generate in the background screen description.",
     )
+    request_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0.0,
+        description="Timeout for OpenAI-compatible screen vision HTTP requests.",
+    )
+
+    def effective_tool_analyzer(self) -> Literal["fastvlm", "openai_compatible"]:
+        if self.tool_analyzer == "same":
+            return self.analyzer
+        return cast(Literal["fastvlm", "openai_compatible"], self.tool_analyzer)
 
 
 class VisionConfig(BaseModel):
@@ -108,8 +138,8 @@ class VisionConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _migrate_legacy_camera_config(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
+    def _migrate_legacy_camera_config(cls, data: object) -> object:
+        if not isinstance(data, Mapping):
             return data
 
         legacy_camera_keys = {
@@ -120,16 +150,17 @@ class VisionConfig(BaseModel):
             "max_tokens",
         }
         if "camera" not in data and any(key in data for key in legacy_camera_keys):
-            data = dict(data)
-            data["camera"] = {
-                key: data[key]
+            data_dict = dict(data)
+            data_dict["camera"] = {
+                key: data_dict[key]
                 for key in legacy_camera_keys
-                if key in data
+                if key in data_dict
             }
+            return data_dict
         return data
 
     @model_validator(mode="after")
-    def _default_to_camera_for_legacy_configs(self) -> "VisionConfig":
+    def _default_to_camera_for_legacy_configs(self) -> VisionConfig:
         if self.camera is None and self.screen is None:
             self.camera = CameraVisionConfig()
         return self

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 import queue
 import threading
@@ -12,11 +13,12 @@ import cv2
 from loguru import logger
 import numpy as np
 from numpy.typing import NDArray
+import requests
 
 from ..autonomy import EventBus
 from ..autonomy.events import VisionUpdateEvent
 from ..observability import ObservabilityBus, trim_message
-from .constants import SCREEN_DEFAULT_PROMPT
+from .constants import SCREEN_DEFAULT_PROMPT, SCREEN_OPENAI_SYSTEM_PROMPT
 from .fastvlm import FastVLM
 from .vision_config import ScreenVisionConfig
 from .vision_request import VisionRequest
@@ -49,7 +51,8 @@ class ScreenVisionProcessor:
         self._request_queue = request_queue
         self._event_bus = event_bus
         self._observability_bus = observability_bus
-        self._model = model or (FastVLM(model_dir) if config.analyzer == "fastvlm" else None)
+        needs_fastvlm = config.analyzer == "fastvlm" or config.effective_tool_analyzer() == "fastvlm"
+        self._model = model or (FastVLM(model_dir) if needs_fastvlm else None)
         self._last_frames: dict[int, NDArray[np.uint8]] = {}
         self._last_features: dict[int, NDArray[np.float32]] = {}
         self._prompt_cache: dict[tuple[int, str, int], str] = {}
@@ -143,6 +146,7 @@ class ScreenVisionProcessor:
             return True
 
         results: list[str] = []
+        analyzer = self.config.effective_tool_analyzer()
         for monitor_id in monitor_ids:
             frame = self._grab_monitor(monitor_id)
             if frame is None:
@@ -157,9 +161,10 @@ class ScreenVisionProcessor:
             )
             prompt = request.prompt.strip() if request.prompt else ""
             cache_key = (monitor_id, prompt, int(request.max_tokens))
+            description = None
             if reuse_cached:
                 description = self._prompt_cache.get(cache_key)
-                if description is None:
+                if description is None and analyzer == "fastvlm" and self._model is not None:
                     description = self._model.describe_from_features(
                         self._last_features[monitor_id],
                         prompt=prompt,
@@ -167,7 +172,7 @@ class ScreenVisionProcessor:
                     )
                     if description:
                         self._prompt_cache[cache_key] = description
-            else:
+            if description is None:
                 self._last_frames[monitor_id] = processed.copy()
                 self._clear_monitor_cache(monitor_id)
                 description = self._get_description(
@@ -175,6 +180,8 @@ class ScreenVisionProcessor:
                     frame,
                     prompt=prompt,
                     max_tokens=request.max_tokens,
+                    analyzer=analyzer,
+                    use_tool_config=True,
                 )
 
             if description:
@@ -286,13 +293,24 @@ class ScreenVisionProcessor:
         frame: NDArray[np.uint8],
         prompt: str,
         max_tokens: int,
+        analyzer: str | None = None,
+        use_tool_config: bool = False,
     ) -> str | None:
-        if self.config.analyzer != "fastvlm":
-            logger.error(
-                "ScreenVisionProcessor: analyzer '{}' is configured but only FastVLM is implemented.",
-                self.config.analyzer,
-            )
+        analyzer = analyzer or self.config.analyzer
+        if analyzer == "openai_compatible":
+            return self._get_openai_description(monitor_id, frame, prompt, max_tokens, use_tool_config)
+        if analyzer != "fastvlm":
+            logger.error("ScreenVisionProcessor: unsupported analyzer '{}'.", analyzer)
             return None
+        return self._get_fastvlm_description(monitor_id, frame, prompt, max_tokens)
+
+    def _get_fastvlm_description(
+        self,
+        monitor_id: int,
+        frame: NDArray[np.uint8],
+        prompt: str,
+        max_tokens: int,
+    ) -> str | None:
         if self._model is None:
             logger.error("ScreenVisionProcessor: FastVLM model is unavailable.")
             return None
@@ -313,6 +331,119 @@ class ScreenVisionProcessor:
         except Exception as exc:
             logger.error("FastVLM screen inference failed: {}", exc)
             return None
+
+    def _get_openai_description(
+        self,
+        monitor_id: int,
+        frame: NDArray[np.uint8],
+        prompt: str,
+        max_tokens: int,
+        use_tool_config: bool = False,
+    ) -> str | None:
+        url = self._openai_completion_url(use_tool_config=use_tool_config)
+        if not url:
+            logger.error("ScreenVisionProcessor: openai_compatible analyzer needs screen.completion_url.")
+            return None
+
+        prompt = prompt.strip() if prompt else SCREEN_DEFAULT_PROMPT
+        data_url = self._frame_to_data_url(frame)
+        if not data_url:
+            return None
+
+        payload = {
+            "model": self._openai_model(use_tool_config=use_tool_config),
+            "messages": [
+                {"role": "system", "content": SCREEN_OPENAI_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                },
+            ],
+            "max_tokens": max_tokens,
+            "stream": False,
+            "temperature": 0.0,
+        }
+        headers = {"Content-Type": "application/json"}
+        if self.config.tool_api_key:
+            headers["Authorization"] = f"Bearer {self.config.tool_api_key}"
+
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=self.config.request_timeout_seconds,
+            )
+            response.raise_for_status()
+            description = self._extract_openai_content(response.json())
+            if description:
+                self._prompt_cache[(monitor_id, prompt, int(max_tokens))] = description
+            return description
+        except requests.Timeout:
+            logger.error("OpenAI-compatible screen inference timed out after {}s.", self.config.request_timeout_seconds)
+        except requests.RequestException as exc:
+            logger.error("OpenAI-compatible screen inference failed: {}", exc)
+        except ValueError as exc:
+            logger.error("OpenAI-compatible screen inference returned invalid JSON: {}", exc)
+        return None
+
+    def _openai_model(self, use_tool_config: bool = False) -> str:
+        if use_tool_config and self.config.tool_model:
+            return self.config.tool_model
+        return self.config.model
+
+    def _openai_completion_url(self, use_tool_config: bool = False) -> str | None:
+        url = None
+        if use_tool_config:
+            url = self.config.tool_completion_url
+        url = url or self.config.completion_url
+        if not url:
+            return None
+        url = str(url).rstrip("/")
+        if url.endswith("/chat/completions"):
+            return url
+        if url.endswith("/v1"):
+            return f"{url}/chat/completions"
+        return f"{url}/v1/chat/completions"
+
+    @staticmethod
+    def _frame_to_data_url(frame: NDArray[np.uint8]) -> str | None:
+        ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ok:
+            logger.error("ScreenVisionProcessor: failed to encode screenshot as JPEG.")
+            return None
+        image_b64 = base64.b64encode(encoded.tobytes()).decode("ascii")
+        return f"data:image/jpeg;base64,{image_b64}"
+
+    @staticmethod
+    def _extract_openai_content(payload: dict[str, Any]) -> str | None:
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return None
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            return None
+        message = choice.get("message")
+        content: Any = None
+        if isinstance(message, dict):
+            content = message.get("content")
+        if content is None:
+            content = choice.get("text")
+        if isinstance(content, str):
+            return content.strip() or None
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+            text = " ".join(part.strip() for part in parts if part.strip())
+            return text or None
+        return None
 
     @staticmethod
     def _pad_to_square(frame: NDArray[np.uint8]) -> NDArray[np.uint8]:

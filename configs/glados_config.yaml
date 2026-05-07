@@ -27,12 +27,17 @@ Glados:
       enabled: false
       backend: "mss"
       analyzer: "fastvlm"
+      tool_analyzer: "openai_compatible"
       monitors: "all"
+      model: "bartowski/Qwen_Qwen3.5-4B-GGUF:Q4_K_M"
+      completion_url: null
+      tool_completion_url: "http://localhost:12331/v1/chat/completions"
       thumbnail_interval_seconds: 1
       capture_interval_seconds: 5
       resolution: 384
       scene_change_threshold: 0.04
       max_tokens: 128
+      request_timeout_seconds: 60
 
   autonomy:
     enabled: true
