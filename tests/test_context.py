@@ -1,6 +1,11 @@
 from datetime import datetime, timedelta, timezone
 
-from glados.core.context import ContextBuilder, SessionClockContext, format_current_time_context
+from glados.core.context import (
+    ContextBuilder,
+    SessionClockContext,
+    format_current_time_context,
+    format_runtime_self_context,
+)
 
 
 def test_time_context_contains_local_clock_details() -> None:
@@ -13,6 +18,16 @@ def test_time_context_contains_local_clock_details() -> None:
     assert "Wednesday, May 06, 2026" in context
     assert "11:09 PM" in context
     assert "2026-05-06T23:09:12+08:00" in context
+
+
+def test_runtime_self_context_marks_runtime_data_as_internal_state() -> None:
+    context = format_runtime_self_context("audio")
+
+    assert "[runtime_self]" in context
+    assert "is YOU" in context
+    assert "first person" in context
+    assert "do not have access" in context
+    assert "Current input mode: audio" in context
 
 
 def test_context_builder_includes_time_source() -> None:

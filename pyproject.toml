@@ -43,6 +43,13 @@ export = [
     "onnxconverter-common>=1.16.0",
 ]
 api = ["litestar[standard,structlog]>=2.15.1"]
+voice = [
+    "opensmile",
+    "torch",
+    "torchcrepe",
+    "funasr",
+    "modelscope",
+]
 
 [project.scripts]
 glados = "glados.cli:main"

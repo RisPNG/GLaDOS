@@ -323,6 +323,9 @@ See [mcp.md](/docs/mcp.md) for configuration.
    pip install -e ".[cuda,dev]"
    pip install -U "onnxruntime-gpu[cuda,cudnn]"
    glados download
+   pip uninstall -y torch torchvision torchaudio
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+   pip install -e ".[voice]"
    ```
 
 3. Run:

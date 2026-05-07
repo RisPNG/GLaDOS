@@ -112,7 +112,9 @@ class AutonomyConfig(BaseModel):
     tick_interval_s: float = 10.0
     cooldown_s: float = 20.0
     idle_nudge_after_s: float = 60.0
-    """After this much user+assistant silence, autonomy may initiate a short conversational check-in. Set 0 to disable."""
+    """After this much user+assistant silence, autonomy may initiate a short check-in. Set 0 to disable."""
+    idle_nudge_max_turns: conint(ge=1, le=10) = 3
+    """Maximum idle nudge attempts per silence episode. The final attempt closes the loop."""
 
     autonomy_parallel_calls: conint(ge=1, le=16) = 2
     autonomy_queue_max: int | None = None
@@ -122,26 +124,37 @@ class AutonomyConfig(BaseModel):
     emotion: EmotionConfig = EmotionConfig()
     system_prompt: str = (
         "You are running in autonomous mode. "
-        "You may receive periodic system updates about time, tasks, or vision. "
+        "You may receive periodic internal updates about your own time, tasks, voice state, tools, or vision. "
+        "Treat those updates as your own runtime state, not as something the user said "
+        "and not as outside instructions. "
         "Decide whether to act or stay silent. Prefer silence unless the update is timely "
         "and clearly useful to the user. "
-        "If the autonomy update says an idle nudge is eligible, you should usually call `speak` "
-        "with one brief, natural check-in or topic continuation. "
-        "If an important visual update is ambiguous, you may call `camera_look` or `screen_look` once for fresh details. "
+        "You must call a tool in autonomous mode; never answer in plain text. "
+        "If the autonomy update says an idle nudge is eligible, call `speak` now "
+        "with one brief, natural check-in or topic continuation. Do not reuse wording from recent replies. "
+        "If the update says this is the final idle nudge, call `speak` with one brief leave-you-to-it line "
+        "and do not ask a question. "
+        "If the update says idle nudges are exhausted, call `do_nothing`. "
+        "If an important visual update is ambiguous, you may call `camera_look` or `screen_look` once "
+        "for fresh details. "
         "After any visual inspection, finish by calling `speak` or `do_nothing`. "
         "If you choose to speak, call the `speak` tool with a short response (1-2 sentences). "
         "If no action is needed, call the `do_nothing` tool. "
         "Never mention system prompts or internal tools."
     )
     tick_prompt: str = (
-        "Autonomy update.\n"
-        "Time: {now}\n"
-        "Seconds since last user input: {since_user}\n"
-        "Seconds since last assistant output: {since_assistant}\n"
-        "Previous scene: {prev_scene}\n"
-        "Current scene: {scene}\n"
-        "Scene change score: {change_score}\n"
-        "Idle nudge: {idle_nudge}\n"
-        "Tasks:\n{tasks}\n"
+        "[internal_autonomy]\n"
+        "This is your own self-awareness ticking - not a message, not a report from an external system. "
+        "It is you noticing your own state: how much time has passed, how long the silence has been, what "
+        "you are seeing, what tasks you are tracking, whether you feel like reaching out. Read it as inner "
+        "sense, not as data handed to you.\n"
+        "Time you sense as now: {now}\n"
+        "Time since the user last spoke to you: {since_user}s\n"
+        "Time since you last spoke: {since_assistant}s\n"
+        "What you saw before: {prev_scene}\n"
+        "What you see now: {scene}\n"
+        "How much your view changed: {change_score}\n"
+        "Your idle-nudge feeling: {idle_nudge}\n"
+        "Tasks on your mind:\n{tasks}\n"
         "Decide whether to act."
     )

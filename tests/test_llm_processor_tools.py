@@ -196,3 +196,39 @@ def test_autonomy_tool_result_does_not_trigger_followup_llm_call(mocker) -> None
     assert not thread.is_alive()
     post_mock.assert_not_called()
     assert processor._conversation_store.snapshot() == []
+
+
+def test_autonomy_idle_nudge_plain_text_fallback_speaks() -> None:
+    processor = _processor()
+
+    handled = processor._handle_autonomy_plain_text_fallback(
+        {"content": "Idle nudge: eligible - silence has lasted 10.0s"},
+        ["Hey, still here when you want to keep going."],
+    )
+
+    assert handled is True
+    assert processor.tts_input_queue.get(timeout=1) == "Hey, still here when you want to keep going."
+
+
+def test_autonomy_plain_text_fallback_ignores_non_idle_text() -> None:
+    processor = _processor()
+
+    handled = processor._handle_autonomy_plain_text_fallback(
+        {"content": "Tasks: none"},
+        ["I should not be spoken."],
+    )
+
+    assert handled is False
+    assert processor.tts_input_queue.empty()
+
+
+def test_autonomy_idle_nudge_empty_text_fallback_uses_default() -> None:
+    processor = _processor()
+
+    handled = processor._handle_autonomy_plain_text_fallback(
+        {"content": "Idle nudge: final - silence has lasted 30.0s"},
+        [],
+    )
+
+    assert handled is True
+    assert processor.tts_input_queue.get(timeout=1) == "I'll leave you to it for now."

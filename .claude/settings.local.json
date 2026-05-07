@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pytest tests/test_autonomy_loop.py -x --no-header)",
+      "Bash(venv use *)",
+      "PowerShell(venv use glados)",
+      "PowerShell(pytest tests/test_autonomy_loop.py -x --no-header 2>&1)"
+    ]
+  }
+}

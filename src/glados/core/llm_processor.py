@@ -747,6 +747,44 @@ class LanguageModelProcessor:
                 logger.warning(f"LLM Processor: Failed to load MCP tool definitions: {e}")
         return tools
 
+    def _handle_autonomy_plain_text_fallback(
+        self,
+        llm_message: dict[str, Any],
+        text_chunks: list[str],
+    ) -> bool:
+        """Speak plain text from autonomy only when the model ignored tools for an idle nudge."""
+        prompt = str(llm_message.get("content", ""))
+        if not self._is_idle_nudge_prompt(prompt):
+            return False
+
+        text = trim_message("".join(text_chunks).strip(), limit=300)
+        if not text:
+            text = self._default_idle_nudge_text(prompt)
+
+        lowered = text.lower().strip()
+        if lowered in {"do_nothing", "do nothing", "no action", "stay silent"}:
+            return False
+        if "[internal_autonomy]" in lowered or "autonomy update" in lowered:
+            return False
+
+        logger.warning("LLM Processor: autonomy idle nudge returned plain text; speaking fallback.")
+        self.tts_input_queue.put(text)
+        return True
+
+    @staticmethod
+    def _is_idle_nudge_prompt(prompt: str) -> bool:
+        lowered = prompt.lower()
+        return "idle nudge: eligible" in lowered or "idle nudge: final" in lowered
+
+    @staticmethod
+    def _default_idle_nudge_text(prompt: str) -> str:
+        lowered = prompt.lower()
+        if "idle nudge: final" in lowered:
+            return "I'll leave you to it for now."
+        if "idle nudge 2/" in lowered:
+            return "Still here, no rush."
+        return "Still here if you want to keep going."
+
     def run(self) -> None:
         """
         Starts the main loop for the LanguageModelProcessor thread.
@@ -838,6 +876,7 @@ class LanguageModelProcessor:
 
                 tool_calls_buffer: list[dict[str, Any]] = []
                 sentence_buffer: list[str] = []
+                autonomy_text_buffer: list[str] = []
                 thinking_buffer: list[str] = []
                 in_thinking = False
                 harmony_mode = False
@@ -890,6 +929,8 @@ class LanguageModelProcessor:
                                             if chunk:
                                                 if isinstance(chunk, list):
                                                     self._process_tool_chunks(tool_calls_buffer, chunk)
+                                                elif autonomy_mode:
+                                                    autonomy_text_buffer.append(chunk)
                                                 elif not autonomy_mode:
                                                     # Extract thinking tags before TTS (auto-detects format)
                                                     speakable, in_thinking, harmony_mode = self._extract_thinking(
@@ -910,6 +951,8 @@ class LanguageModelProcessor:
 
                                 if self.processing_active_event.is_set() and tool_calls_buffer:
                                     self._process_tool_call(tool_calls_buffer, autonomy_mode, tool_names)
+                                elif self.processing_active_event.is_set() and autonomy_mode:
+                                    self._handle_autonomy_plain_text_fallback(llm_message, autonomy_text_buffer)
                                 elif self.processing_active_event.is_set() and sentence_buffer:
                                     self._process_sentence_for_tts(sentence_buffer)
                             break

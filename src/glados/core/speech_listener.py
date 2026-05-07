@@ -21,10 +21,12 @@ from typing import Callable
 from ..ASR import TranscriberProtocol
 from ..audio_io import AudioProtocol
 from .audio_state import AudioState
+from .voice_observer import VoiceObservation, VoiceObserver
 from ..observability import ObservabilityBus, trim_message
 
 # Callback signature: (event_type: str) -> None
 InterruptCallback = Callable[[str], None]
+VoiceObservationCallback = Callable[[VoiceObservation], None]
 
 
 class SpeechListener:
@@ -58,6 +60,8 @@ class SpeechListener:
         asr_muted_event: threading.Event | None = None,
         audio_state: AudioState | None = None,
         on_interrupt: InterruptCallback | None = None,
+        voice_observer: VoiceObserver | None = None,
+        on_voice_observation: VoiceObservationCallback | None = None,
     ) -> None:
         """
         Initializes the SpeechListener with audio I/O, inter-thread communication, and ASR model.
@@ -96,6 +100,8 @@ class SpeechListener:
         self._asr_muted_event = asr_muted_event
         self._audio_state = audio_state
         self._on_interrupt = on_interrupt
+        self._voice_observer = voice_observer
+        self._on_voice_observation = on_voice_observation
 
     def run(self) -> None:
         """
@@ -279,6 +285,8 @@ class SpeechListener:
 
         if detected_text:
             logger.success(f"ASR text: '{detected_text}'")
+            if self._interaction_state:
+                self._interaction_state.mark_user()
 
             if self.wake_word and not self._wakeword_detected(detected_text):
                 logger.info(f"Required wake word {self.wake_word=} not detected.")
@@ -289,6 +297,7 @@ class SpeechListener:
                         kind="user_input",
                         message=trim_message(detected_text),
                     )
+                self._analyze_voice(detected_text)
                 self.llm_queue.put(
                     {
                         "role": "user",
@@ -297,11 +306,25 @@ class SpeechListener:
                         "_lane": "priority",
                     }
                 )
-                if self._interaction_state:
-                    self._interaction_state.mark_user()
                 self.processing_active_event.set()
 
         self.reset()
+
+    def _analyze_voice(self, detected_text: str) -> VoiceObservation | None:
+        if self._voice_observer is None or not self._voice_observer.is_enabled():
+            return None
+        try:
+            audio = np.concatenate(self._samples)
+        except ValueError:
+            return None
+        observation = self._voice_observer.analyze(
+            audio,
+            transcript=detected_text,
+            sample_rate=getattr(self.audio_io, "SAMPLE_RATE", 16000),
+        )
+        if observation is not None and self._on_voice_observation is not None:
+            self._on_voice_observation(observation)
+        return observation
 
     def asr(self, samples: list[NDArray[np.float32]]) -> str:
         """

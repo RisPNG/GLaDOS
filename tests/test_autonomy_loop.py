@@ -4,12 +4,19 @@ import time
 
 from glados.autonomy.config import AutonomyConfig
 from glados.autonomy.event_bus import EventBus
+from glados.autonomy.events import TimeTickEvent
 from glados.autonomy.interaction_state import InteractionState
 from glados.autonomy.loop import AutonomyLoop
 from glados.autonomy.slots import TaskSlotStore
+from glados.core.audio_state import AudioState
 
 
-def _loop(state: InteractionState, cooldown_s: float = 20.0) -> AutonomyLoop:
+def _loop(
+    state: InteractionState,
+    cooldown_s: float = 20.0,
+    audio_state: AudioState | None = None,
+    priority_queue: queue.Queue | None = None,
+) -> AutonomyLoop:
     return AutonomyLoop(
         config=AutonomyConfig(enabled=True, cooldown_s=cooldown_s),
         event_bus=EventBus(),
@@ -20,6 +27,8 @@ def _loop(state: InteractionState, cooldown_s: float = 20.0) -> AutonomyLoop:
         processing_active_event=threading.Event(),
         currently_speaking_event=threading.Event(),
         shutdown_event=threading.Event(),
+        audio_state=audio_state,
+        priority_queue=priority_queue,
     )
 
 
@@ -70,4 +79,62 @@ def test_idle_nudge_becomes_eligible_after_threshold() -> None:
     loop = _loop(state)
 
     assert "eligible" in loop._idle_nudge_guidance(75.0, 75.0)
+    assert "Required action" in loop._idle_nudge_guidance(75.0, 75.0)
     assert "threshold" in loop._build_prompt(object())
+    assert "[internal_autonomy]" in loop._build_prompt(object())
+
+
+def test_idle_nudge_final_then_exhausts_until_user_speaks() -> None:
+    state = InteractionState()
+    _set_interaction_times(state, user_age_s=75.0, assistant_age_s=75.0)
+    loop = _loop(state)
+
+    assert "idle nudge 1/3" in loop._build_prompt(TimeTickEvent(time.time()))
+    assert "idle nudge 2/3" in loop._build_prompt(TimeTickEvent(time.time()))
+    assert "final" in loop._build_prompt(TimeTickEvent(time.time()))
+    assert loop._build_prompt(TimeTickEvent(time.time())) == ""
+
+    _set_interaction_times(state, user_age_s=1.0, assistant_age_s=80.0)
+    assert "wait" in loop._idle_nudge_guidance(1.0, 80.0)
+    _set_interaction_times(state, user_age_s=75.0, assistant_age_s=75.0)
+    assert "idle nudge 1/3" in loop._build_prompt(TimeTickEvent(time.time()))
+
+
+def test_autonomy_skips_when_user_voice_currently_active() -> None:
+    state = InteractionState()
+    _set_interaction_times(state, user_age_s=75.0, assistant_age_s=10.0)
+    audio_state = AudioState()
+    audio_state.update(rms=0.1, vad_active=True)
+
+    assert _loop(state, audio_state=audio_state)._should_skip() is True
+
+
+def test_autonomy_skips_during_user_speaking_grace_window() -> None:
+    state = InteractionState()
+    _set_interaction_times(state, user_age_s=75.0, assistant_age_s=10.0)
+    audio_state = AudioState()
+    audio_state.update(rms=0.1, vad_active=True)
+    audio_state.update(rms=0.0, vad_active=False)
+
+    assert _loop(state, audio_state=audio_state)._should_skip() is True
+
+
+def test_autonomy_runs_after_voice_grace_expires() -> None:
+    state = InteractionState()
+    _set_interaction_times(state, user_age_s=75.0, assistant_age_s=10.0)
+    audio_state = AudioState()
+    audio_state.update(rms=0.1, vad_active=True)
+    audio_state.update(rms=0.0, vad_active=False)
+    with audio_state._lock:
+        audio_state._last_vad_active_at = time.time() - 5.0
+
+    assert _loop(state, audio_state=audio_state)._should_skip() is False
+
+
+def test_autonomy_skips_when_priority_queue_has_pending_user_message() -> None:
+    state = InteractionState()
+    _set_interaction_times(state, user_age_s=75.0, assistant_age_s=10.0)
+    pq: queue.Queue = queue.Queue()
+    pq.put({"role": "user", "content": "hi"})
+
+    assert _loop(state, priority_queue=pq)._should_skip() is True

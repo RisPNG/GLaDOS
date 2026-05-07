@@ -33,7 +33,7 @@ from ..observability import MindRegistry, ObservabilityBus, trim_message
 from ..vision import VisionConfig, VisionState
 from ..vision.constants import SYSTEM_PROMPT_VISION_HANDLING
 from .audio_data import AudioMessage
-from .context import ContextBuilder, SessionClockContext, format_current_time_context
+from .context import ContextBuilder, SessionClockContext, format_current_time_context, format_runtime_self_context
 from .audio_state import AudioState
 from .conversation_store import ConversationStore
 from .knowledge_store import KnowledgeStore
@@ -48,6 +48,7 @@ from .tool_executor import ToolExecutor
 from .tts_synthesizer import TextToSpeechSynthesizer
 from .memory_context import MemoryContext
 from .session_memory import persist_session_memory
+from .voice_observer import VoiceObservation, VoiceObserver, VoiceObserverConfig
 
 try:
     logger.remove(0)
@@ -123,6 +124,7 @@ class GladosConfig(BaseModel):
     vision: VisionConfig | None = None
     autonomy: AutonomyConfig | None = None
     mcp_servers: list[MCPServerConfig] | None = None
+    voice_observer: VoiceObserverConfig | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path, key_to_config: tuple[str, ...] = ("Glados",)) -> "GladosConfig":
@@ -199,6 +201,7 @@ class Glados:
         vision_config: VisionConfig | None = None,
         autonomy_config: AutonomyConfig | None = None,
         mcp_servers: list[MCPServerConfig] | None = None,
+        voice_observer_config: VoiceObserverConfig | None = None,
         input_mode: Literal["audio", "text", "both"] = "audio",
         tts_enabled: bool = True,
         asr_muted: bool = False,
@@ -250,6 +253,7 @@ class Glados:
         self.vision_config = vision_config if vision_config and vision_config.is_enabled() else None
         self.vision_sources = self.vision_config.enabled_sources() if self.vision_config else set()
         self.autonomy_config = autonomy_config or AutonomyConfig()
+        self.voice_observer_config = voice_observer_config or VoiceObserverConfig()
         self.vision_state: VisionState | None = VisionState() if self.vision_sources else None
         self.camera_request_queue: queue.Queue | None = queue.Queue() if "camera" in self.vision_sources else None
         self.screen_request_queue: queue.Queue | None = queue.Queue() if "screen" in self.vision_sources else None
@@ -280,6 +284,7 @@ class Glados:
         # Create unified context builder for LLM context injection
         self.context_builder = ContextBuilder()
         self.session_clock = SessionClockContext()
+        self.context_builder.register("runtime_self", lambda: format_runtime_self_context(self.input_mode), priority=12)
         self.context_builder.register("time", format_current_time_context, priority=11)
         self.context_builder.register("session", self.session_clock.as_prompt, priority=10)
         self.context_builder.register("preferences", self.preferences_store.as_prompt, priority=9)
@@ -289,6 +294,12 @@ class Glados:
         # Register long-term memory for context injection
         self.memory_context = MemoryContext()
         self.context_builder.register("memory", self.memory_context.as_prompt, priority=7)
+        self.voice_observer = VoiceObserver(
+            self.voice_observer_config,
+            observability_bus=self.observability_bus,
+        )
+        if self.voice_observer.is_enabled():
+            self.context_builder.register("voice", self.voice_observer.as_prompt, priority=9)
 
         self._command_registry, self._command_order = self._build_command_registry()
         # Initialize events for thread synchronization
@@ -387,6 +398,8 @@ class Glados:
                 asr_muted_event=self.asr_muted_event,
                 audio_state=self.audio_state,
                 on_interrupt=lambda _: self._push_emotion_event("user", "User interrupted me mid-sentence"),
+                voice_observer=self.voice_observer,
+                on_voice_observation=self._on_voice_observation,
             )
         if self.input_mode in {"text", "both"}:
             if self.input_mode == "text":
@@ -571,6 +584,8 @@ class Glados:
                 observability_bus=self.observability_bus,
                 inflight_counter=self._autonomy_inflight,
                 pause_time=self.PAUSE_TIME,
+                audio_state=self.audio_state,
+                priority_queue=self.llm_queue_priority,
             )
             # Wire emotion agent to autonomy loop for vision events
             if self._emotion_agent is not None:
@@ -883,6 +898,7 @@ class Glados:
             vision_config=config.vision,
             autonomy_config=config.autonomy,
             mcp_servers=config.mcp_servers,
+            voice_observer_config=config.voice_observer,
             input_mode=config.input_mode,
             tts_enabled=config.tts_enabled,
             asr_muted=config.asr_muted,
@@ -1428,6 +1444,10 @@ class Glados:
             self._push_emotion_event("system", f"Tool '{tool_name}' failed")
         elif event_type == "tool_timeout":
             self._push_emotion_event("system", f"Tool '{tool_name}' timed out")
+
+    def _on_voice_observation(self, observation: VoiceObservation) -> None:
+        if self.voice_observer_config.push_emotion_events:
+            self._push_emotion_event("voice", observation.to_event_description())
 
     def _cmd_emotion(self, _args: list[str]) -> str:
         if not self._emotion_agent:

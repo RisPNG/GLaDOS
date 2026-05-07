@@ -10,6 +10,7 @@ class AudioSnapshot:
     rms: float
     vad_active: bool
     updated_at: float
+    last_vad_active_at: float
 
 
 class AudioState:
@@ -18,6 +19,7 @@ class AudioState:
         self._rms = 0.0
         self._vad_active = False
         self._updated_at = 0.0
+        self._last_vad_active_at = 0.0
 
     def update(self, rms: float, vad_active: bool) -> None:
         now = time.time()
@@ -25,12 +27,15 @@ class AudioState:
             self._rms = float(rms)
             self._vad_active = bool(vad_active)
             self._updated_at = now
+            if vad_active:
+                self._last_vad_active_at = now
 
     def reset(self) -> None:
         with self._lock:
             self._rms = 0.0
             self._vad_active = False
             self._updated_at = time.time()
+            self._last_vad_active_at = 0.0
 
     def snapshot(self) -> AudioSnapshot:
         with self._lock:
@@ -38,4 +43,5 @@ class AudioState:
                 rms=self._rms,
                 vad_active=self._vad_active,
                 updated_at=self._updated_at,
+                last_vad_active_at=self._last_vad_active_at,
             )

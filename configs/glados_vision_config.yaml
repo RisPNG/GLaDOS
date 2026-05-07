@@ -12,11 +12,34 @@ Glados:
   wake_word: null
   voice: "af_heart"
   announcement: "" # Disabled for now, glados keeps repeating this after each vision observation, not sure why.
+  voice_observer:
+    enabled: true
+    max_context_age_s: 300
+    push_emotion_events: true
+    basic:
+      enabled: true
+    opensmile:
+      enabled: false
+      feature_set: "eGeMAPSv02"
+      feature_level: "Functionals"
+    pitch:
+      enabled: false
+      model: "tiny"
+      hop_ms: 20
+      fmin: 50
+      fmax: 550
+      device: "auto"
+    emotion:
+      enabled: false
+      model: "iic/emotion2vec_plus_large"
+      granularity: "utterance"
+      suppress_external_output: true
   autonomy:
     enabled: false
     tick_interval_s: 10
-    cooldown_s: 20
-    idle_nudge_after_s: 60
+    cooldown_s: 10
+    idle_nudge_after_s: 10
+    idle_nudge_max_turns: 3
   mcp_servers:
     - name: "slow_clap_demo"
       transport: "stdio"

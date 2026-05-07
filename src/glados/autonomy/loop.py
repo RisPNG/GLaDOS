@@ -14,6 +14,7 @@ from .interaction_state import InteractionState
 from .slots import TaskSlotStore
 from ..observability import ObservabilityBus, trim_message
 from ..vision.vision_state import VisionState
+from ..core.audio_state import AudioState
 from ..core.llm_tracking import InFlightCounter
 
 if TYPE_CHECKING:
@@ -23,6 +24,8 @@ if TYPE_CHECKING:
 class AutonomyLoop:
     # Scene change threshold for triggering emotion events
     VISION_EMOTION_THRESHOLD = 0.3
+    # Treat user as still speaking if VAD fired within this window (debounce ASR finalization).
+    USER_SPEAKING_GRACE_S = 1.5
 
     def __init__(
         self,
@@ -39,6 +42,8 @@ class AutonomyLoop:
         inflight_counter: InFlightCounter | None = None,
         emotion_agent: "EmotionAgent | None" = None,
         pause_time: float = 0.1,
+        audio_state: AudioState | None = None,
+        priority_queue: queue.Queue[dict[str, Any]] | None = None,
     ) -> None:
         self._config = config
         self._event_bus = event_bus
@@ -53,8 +58,12 @@ class AutonomyLoop:
         self._inflight_counter = inflight_counter
         self._emotion_agent = emotion_agent
         self._pause_time = pause_time
+        self._audio_state = audio_state
+        self._priority_queue = priority_queue
         self._last_prompt_ts = 0.0
         self._last_scene: str | None = None
+        self._idle_nudge_turns = 0
+        self._last_seen_user_age_s: float | None = None
 
     def set_emotion_agent(self, agent: "EmotionAgent") -> None:
         """Set the emotion agent for vision event forwarding."""
@@ -90,6 +99,10 @@ class AutonomyLoop:
     def _should_skip(self) -> bool:
         if self._currently_speaking_event.is_set():
             return True
+        if self._user_voice_active():
+            return True
+        if self._priority_pending():
+            return True
         since_user = self._interaction_state.seconds_since_user()
         since_assistant = self._interaction_state.seconds_since_assistant()
         if since_user is not None:
@@ -100,6 +113,24 @@ class AutonomyLoop:
         if self._config.cooldown_s <= 0:
             return False
         return (time.time() - self._last_prompt_ts) < self._config.cooldown_s
+
+    def _user_voice_active(self) -> bool:
+        if self._audio_state is None:
+            return False
+        snap = self._audio_state.snapshot()
+        if snap.vad_active:
+            return True
+        if snap.last_vad_active_at <= 0:
+            return False
+        return (time.time() - snap.last_vad_active_at) < self.USER_SPEAKING_GRACE_S
+
+    def _priority_pending(self) -> bool:
+        if self._priority_queue is None:
+            return False
+        try:
+            return self._priority_queue.qsize() > 0
+        except NotImplementedError:
+            return False
 
     def _dispatch(self, prompt: str) -> None:
         prompt = prompt.strip()
@@ -131,7 +162,13 @@ class AutonomyLoop:
         since_assistant = self._interaction_state.seconds_since_assistant()
         since_user_text = f"{since_user:.1f}" if since_user is not None else "unknown"
         since_assistant_text = f"{since_assistant:.1f}" if since_assistant is not None else "unknown"
-        idle_nudge = self._idle_nudge_guidance(since_user, since_assistant)
+        idle_nudge = self._idle_nudge_guidance(
+            since_user,
+            since_assistant,
+            reserve_turn=isinstance(event, TimeTickEvent),
+        )
+        if isinstance(event, TimeTickEvent) and idle_nudge.startswith("exhausted"):
+            return ""
 
         scene = self._current_scene()
         prev_scene = self._last_scene or "unknown"
@@ -175,21 +212,51 @@ class AutonomyLoop:
         self,
         since_user: float | None,
         since_assistant: float | None,
+        reserve_turn: bool = False,
     ) -> str:
         threshold = self._config.idle_nudge_after_s
         if threshold <= 0:
             return "disabled"
+        self._refresh_idle_episode(since_user)
         if since_user is None:
             return "wait - no user input yet"
         if since_assistant is None:
             return "wait - assistant has not replied yet"
         idle_for = min(since_user, since_assistant)
         if idle_for >= threshold:
+            max_turns = self._config.idle_nudge_max_turns
+            if self._idle_nudge_turns >= max_turns:
+                return (
+                    f"exhausted - already made {self._idle_nudge_turns} idle nudge attempt"
+                    f"{'s' if self._idle_nudge_turns != 1 else ''} in this silence episode; "
+                    "stay quiet until the user speaks"
+                )
+            turn_number = self._idle_nudge_turns + 1
+            if reserve_turn:
+                self._idle_nudge_turns = turn_number
+            if turn_number >= max_turns:
+                return (
+                    f"final - silence has lasted {idle_for:.1f}s (threshold {threshold:.1f}s); "
+                    f"idle nudge {turn_number}/{max_turns}. Required action: call `speak` with one brief "
+                    "leave-you-to-it line that fits the conversation. Do not ask a question. "
+                    "After this, stay silent until the user speaks."
+                )
             return (
                 f"eligible - silence has lasted {idle_for:.1f}s "
-                f"(threshold {threshold:.1f}s); speak only if a brief check-in would feel natural"
+                f"(threshold {threshold:.1f}s); idle nudge {turn_number}/{max_turns}. "
+                "Required action: call `speak` with a brief check-in or topic continuation. "
+                "Do not repeat recent wording."
             )
         return f"wait - silence {idle_for:.1f}s below threshold {threshold:.1f}s"
+
+    def _refresh_idle_episode(self, since_user: float | None) -> None:
+        if since_user is None:
+            self._idle_nudge_turns = 0
+            self._last_seen_user_age_s = None
+            return
+        if self._last_seen_user_age_s is not None and since_user + 0.5 < self._last_seen_user_age_s:
+            self._idle_nudge_turns = 0
+        self._last_seen_user_age_s = since_user
 
     def _current_scene(self) -> str | None:
         if self._vision_state is None:
