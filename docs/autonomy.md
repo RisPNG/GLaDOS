@@ -28,6 +28,7 @@ autonomy:
   enabled: true
   tick_interval_s: 10      # Timer interval when vision disabled
   cooldown_s: 20           # Minimum seconds between responses
+  idle_nudge_after_s: 60    # Silence duration before conversational check-in
   autonomy_parallel_calls: 2  # Background workers (1-16)
   coalesce_ticks: true     # Merge overlapping ticks
 ```
@@ -179,6 +180,7 @@ This prevents queue buildup with slow models and keeps the system responsive.
 | `enabled` | bool | `false` | Enable autonomy loop |
 | `tick_interval_s` | float | `10.0` | Seconds between timer ticks (when vision disabled) |
 | `cooldown_s` | float | `20.0` | Minimum seconds between autonomy responses |
+| `idle_nudge_after_s` | float | `60.0` | Seconds of user+assistant silence before autonomy may initiate a brief conversational check-in. Set `0` to disable |
 | `autonomy_parallel_calls` | int | `2` | Number of autonomy lane workers (1-16) |
 | `autonomy_queue_max` | int | `null` | Max queued autonomy requests (null = unlimited) |
 | `coalesce_ticks` | bool | `true` | Skip ticks when work is in flight |

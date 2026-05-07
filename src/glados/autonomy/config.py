@@ -111,6 +111,9 @@ class AutonomyConfig(BaseModel):
     enabled: bool = False
     tick_interval_s: float = 10.0
     cooldown_s: float = 20.0
+    idle_nudge_after_s: float = 60.0
+    """After this much user+assistant silence, autonomy may initiate a short conversational check-in. Set 0 to disable."""
+
     autonomy_parallel_calls: conint(ge=1, le=16) = 2
     autonomy_queue_max: int | None = None
     coalesce_ticks: bool = True
@@ -122,6 +125,8 @@ class AutonomyConfig(BaseModel):
         "You may receive periodic system updates about time, tasks, or vision. "
         "Decide whether to act or stay silent. Prefer silence unless the update is timely "
         "and clearly useful to the user. "
+        "If the autonomy update says an idle nudge is eligible, you should usually call `speak` "
+        "with one brief, natural check-in or topic continuation. "
         "If an important visual update is ambiguous, you may call `camera_look` or `screen_look` once for fresh details. "
         "After any visual inspection, finish by calling `speak` or `do_nothing`. "
         "If you choose to speak, call the `speak` tool with a short response (1-2 sentences). "
@@ -136,6 +141,7 @@ class AutonomyConfig(BaseModel):
         "Previous scene: {prev_scene}\n"
         "Current scene: {scene}\n"
         "Scene change score: {change_score}\n"
+        "Idle nudge: {idle_nudge}\n"
         "Tasks:\n{tasks}\n"
         "Decide whether to act."
     )

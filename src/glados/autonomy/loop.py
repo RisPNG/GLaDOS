@@ -131,6 +131,7 @@ class AutonomyLoop:
         since_assistant = self._interaction_state.seconds_since_assistant()
         since_user_text = f"{since_user:.1f}" if since_user is not None else "unknown"
         since_assistant_text = f"{since_assistant:.1f}" if since_assistant is not None else "unknown"
+        idle_nudge = self._idle_nudge_guidance(since_user, since_assistant)
 
         scene = self._current_scene()
         prev_scene = self._last_scene or "unknown"
@@ -164,10 +165,31 @@ class AutonomyLoop:
                 prev_scene=prev_scene,
                 scene=scene or "unknown",
                 change_score=change_score,
+                idle_nudge=idle_nudge,
                 tasks=tasks,
             )
         except KeyError:
             return self._config.tick_prompt
+
+    def _idle_nudge_guidance(
+        self,
+        since_user: float | None,
+        since_assistant: float | None,
+    ) -> str:
+        threshold = self._config.idle_nudge_after_s
+        if threshold <= 0:
+            return "disabled"
+        if since_user is None:
+            return "wait - no user input yet"
+        if since_assistant is None:
+            return "wait - assistant has not replied yet"
+        idle_for = min(since_user, since_assistant)
+        if idle_for >= threshold:
+            return (
+                f"eligible - silence has lasted {idle_for:.1f}s "
+                f"(threshold {threshold:.1f}s); speak only if a brief check-in would feel natural"
+            )
+        return f"wait - silence {idle_for:.1f}s below threshold {threshold:.1f}s"
 
     def _current_scene(self) -> str | None:
         if self._vision_state is None:

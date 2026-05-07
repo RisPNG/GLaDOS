@@ -47,6 +47,7 @@ from .text_listener import TextListener
 from .tool_executor import ToolExecutor
 from .tts_synthesizer import TextToSpeechSynthesizer
 from .memory_context import MemoryContext
+from .session_memory import persist_session_memory
 
 try:
     logger.remove(0)
@@ -244,6 +245,8 @@ class Glados:
         self.tool_timeout = tool_timeout
         self.mcp_servers = mcp_servers or []
         self._conversation_store = ConversationStore(initial_messages=list(personality_preprompt))
+        self._initial_message_count = len(personality_preprompt)
+        self._session_memory_saved = False
         self.vision_config = vision_config if vision_config and vision_config.is_enabled() else None
         self.vision_sources = self.vision_config.enabled_sources() if self.vision_config else set()
         self.autonomy_config = autonomy_config or AutonomyConfig()
@@ -945,6 +948,7 @@ class Glados:
     def _graceful_shutdown(self) -> None:
         """Perform graceful shutdown of all components."""
         logger.info("Beginning graceful shutdown...")
+        self._persist_session_memory()
 
         # Stop subagents first (they may be using shared resources)
         if self.subagent_manager:
@@ -979,6 +983,34 @@ class Glados:
             )
 
         logger.info("Graceful shutdown complete.")
+
+    def _persist_session_memory(self) -> None:
+        if self._session_memory_saved:
+            return
+        self._session_memory_saved = True
+        if not self.autonomy_config.enabled:
+            return
+        try:
+            llm_config = LLMConfig(
+                url=str(self.completion_url),
+                api_key=self.api_key,
+                model=self.llm_model,
+                timeout=12.0,
+            )
+            result = persist_session_memory(
+                self._conversation_store.snapshot(),
+                llm_config,
+                started_at=self.session_clock.started_at,
+                start_index=self._initial_message_count,
+            )
+            if result.summary_saved or result.facts_saved:
+                logger.success(
+                    "SessionMemory: persisted session summary={}, facts={}",
+                    result.summary_saved,
+                    result.facts_saved,
+                )
+        except Exception as exc:
+            logger.warning("SessionMemory: failed to persist session memory: {}", exc)
 
     def set_asr_muted(self, muted: bool) -> None:
         if muted:

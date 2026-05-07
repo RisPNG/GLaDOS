@@ -16,6 +16,7 @@ Glados:
     enabled: false
     tick_interval_s: 10
     cooldown_s: 20
+    idle_nudge_after_s: 60
   mcp_servers:
     - name: "slow_clap_demo"
       transport: "stdio"

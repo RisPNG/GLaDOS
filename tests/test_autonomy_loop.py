@@ -54,3 +54,20 @@ def test_autonomy_runs_after_user_cooldown_and_assistant_reply() -> None:
     _set_interaction_times(state, user_age_s=30.0, assistant_age_s=10.0)
 
     assert _loop(state, cooldown_s=20.0)._should_skip() is False
+
+
+def test_idle_nudge_waits_below_threshold() -> None:
+    state = InteractionState()
+    _set_interaction_times(state, user_age_s=45.0, assistant_age_s=45.0)
+    loop = _loop(state)
+
+    assert "wait" in loop._idle_nudge_guidance(45.0, 45.0)
+
+
+def test_idle_nudge_becomes_eligible_after_threshold() -> None:
+    state = InteractionState()
+    _set_interaction_times(state, user_age_s=75.0, assistant_age_s=75.0)
+    loop = _loop(state)
+
+    assert "eligible" in loop._idle_nudge_guidance(75.0, 75.0)
+    assert "threshold" in loop._build_prompt(object())
