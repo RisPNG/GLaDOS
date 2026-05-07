@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class VisionConfig(BaseModel):
-    """Configuration for ONNX-based FastVLM vision module."""
+class CameraVisionConfig(BaseModel):
+    """Configuration for webcam/camera vision."""
 
-    model_dir: Path | None = Field(
-        default=None,
-        description="Path to FastVLM ONNX model directory. Uses default if None.",
-    )
+    enabled: bool = Field(default=True, description="Enable camera vision.")
+
     camera_index: int = Field(
         default=0,
         ge=0,
@@ -37,5 +36,113 @@ class VisionConfig(BaseModel):
         default=64,
         gt=0,
         le=512,
-        description="Maximum tokens to generate in the background vision description.",
+        description="Maximum tokens to generate in the background camera description.",
     )
+
+
+class ScreenVisionConfig(BaseModel):
+    """Configuration for monitor/screen vision."""
+
+    enabled: bool = Field(default=False, description="Enable monitor/screen vision.")
+    backend: Literal["mss", "dxcam"] = Field(
+        default="mss",
+        description="Screen capture backend. MSS is cross-platform; DXcam is Windows-only and optional.",
+    )
+    analyzer: Literal["fastvlm", "openai_compatible"] = Field(
+        default="fastvlm",
+        description="Screen understanding backend. openai_compatible is reserved for a future VLM server.",
+    )
+    model: str = Field(
+        default="bartowski/Qwen_Qwen3.5-4B-GGUF:Q4_K_M",
+        description="Future OpenAI-compatible VLM model id for screen_look.",
+    )
+    completion_url: str | None = Field(
+        default=None,
+        description="Future OpenAI-compatible VLM endpoint for screen_look.",
+    )
+    monitors: Literal["all", "primary"] | list[int] = Field(
+        default="all",
+        description="Monitor selection. Use 'all', 'primary', or 1-based MSS monitor indexes.",
+    )
+    thumbnail_interval_seconds: float = Field(
+        default=1.0,
+        gt=0.0,
+        description="Interval in seconds between low-resolution change checks.",
+    )
+    capture_interval_seconds: float = Field(
+        default=5.0,
+        gt=0.0,
+        description="Minimum seconds between full screen VLM summaries for the same monitor.",
+    )
+    resolution: int = Field(
+        default=384,
+        gt=0,
+        description="Resolution used for screen change detection.",
+    )
+    scene_change_threshold: float = Field(
+        default=0.04,
+        ge=0.0,
+        le=1.0,
+        description="Minimum normalized difference between thumbnails to trigger screen inference.",
+    )
+    max_tokens: int = Field(
+        default=128,
+        gt=0,
+        le=512,
+        description="Maximum tokens to generate in the background screen description.",
+    )
+
+
+class VisionConfig(BaseModel):
+    """Configuration for camera and screen vision sources."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = Field(default=True, description="Enable all configured vision sources.")
+    model_dir: Path | None = Field(
+        default=None,
+        description="Path to FastVLM ONNX model directory. Uses default if None.",
+    )
+    camera: CameraVisionConfig | None = None
+    screen: ScreenVisionConfig | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_camera_config(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        legacy_camera_keys = {
+            "camera_index",
+            "capture_interval_seconds",
+            "resolution",
+            "scene_change_threshold",
+            "max_tokens",
+        }
+        if "camera" not in data and any(key in data for key in legacy_camera_keys):
+            data = dict(data)
+            data["camera"] = {
+                key: data[key]
+                for key in legacy_camera_keys
+                if key in data
+            }
+        return data
+
+    @model_validator(mode="after")
+    def _default_to_camera_for_legacy_configs(self) -> "VisionConfig":
+        if self.camera is None and self.screen is None:
+            self.camera = CameraVisionConfig()
+        return self
+
+    def enabled_sources(self) -> set[str]:
+        if not self.enabled:
+            return set()
+        sources: set[str] = set()
+        if self.camera and self.camera.enabled:
+            sources.add("camera")
+        if self.screen and self.screen.enabled:
+            sources.add("screen")
+        return sources
+
+    def is_enabled(self) -> bool:
+        return bool(self.enabled_sources())

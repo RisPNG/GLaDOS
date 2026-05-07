@@ -1,196 +1,148 @@
 # GLaDOS Vision Module
 
-GLaDOS can see and react to its environment using Apple's FastVLM running locally via ONNX Runtime.
+GLaDOS vision is a local visual sensing layer. The main chatbot can remain a
+text-only LLM: camera and screen processors convert pixels into short text
+snapshots, then inject those snapshots into chat context.
 
 ## Role in Architecture
 
-Vision is a core input to the [autonomy loop](./autonomy.md). When enabled:
+When enabled:
 
-1. **Camera captures frames** at configured intervals
-2. **Scene change detection** identifies meaningful changes
-3. **FastVLM generates descriptions** of the current scene
-4. **VisionUpdateEvent triggers** the autonomy loop
-5. **Main agent decides** whether to act on what it sees
+1. Camera and/or screen processors capture frames.
+2. Low-resolution frame differencing detects meaningful changes.
+3. FastVLM generates compact descriptions.
+4. `VisionUpdateEvent` triggers autonomy when a scene changes.
+5. The main agent decides whether to speak, stay silent, remember, or call a
+   fresh inspection tool.
 
 ```mermaid
 flowchart LR
-    A[Camera<br>Capture] --> B[Scene Change<br>Detection]
-    B --> C[FastVLM<br>Inference]
-    C --> D[VisionUpdate<br>Event]
-    D --> E[Autonomy Loop<br>Main Agent]
+    cam[Camera] --> cproc[CameraVisionProcessor]
+    scr[Monitors] --> sproc[ScreenVisionProcessor]
+    cproc --> state[VisionState]
+    sproc --> state
+    state --> llm[Main LLM Context]
+    cproc --> event[VisionUpdateEvent]
+    sproc --> event
+    event --> auto[Autonomy Loop]
 ```
 
-Vision takes priority over timer ticks - when vision is enabled, scene changes drive the autonomy loop instead of periodic timers.
+Vision takes priority over timer ticks. If vision is enabled, scene changes
+drive the autonomy loop instead of periodic timer ticks.
 
 ## Quick Start
 
-The vision module is disabled by default. To enable it:
+The default config does not enable vision. Use the example config or add a
+`vision:` block to your own config:
 
 ```bash
 uv run glados start --config ./configs/glados_vision_config.yaml
 ```
 
-## Setup
-
-### 1. Download FastVLM Models
-
-```bash
-huggingface-cli download onnx-community/FastVLM-0.5B-ONNX \
-  --local-dir models/Vision \
-  --include "onnx/vision_encoder_fp16.onnx" \
-  --include "onnx/embed_tokens_int8.onnx" \
-  --include "onnx/decoder_model_merged_q4f16.onnx" \
-  --include "config.json" \
-  --include "preprocessor_config.json" \
-  --include "tokenizer.json" \
-  --include "tokenizer_config.json" \
-  --include "README.md" \
-  --include "LICENSE"
-```
-
-Or using the newer command:
-
-```bash
-hf download onnx-community/FastVLM-0.5B-ONNX \
-  --local-dir models/Vision \
-  --include "onnx/vision_encoder_fp16.onnx" \
-  --include "onnx/embed_tokens_int8.onnx" \
-  --include "onnx/decoder_model_merged_q4f16.onnx" \
-  --include "config.json" \
-  --include "preprocessor_config.json" \
-  --include "tokenizer.json" \
-  --include "tokenizer_config.json" \
-  --include "README.md" \
-  --include "LICENSE"
-```
-
-This downloads the ONNX models (~640MB) to the default location.
-
-### 2. Configure Vision
+## Configuration
 
 ```yaml
 vision:
-  enabled: true
-  model_dir: "models/Vision"
-  camera_index: 0
-  capture_interval_seconds: 5
-  resolution: 384
-  scene_change_threshold: 0.05
-  max_tokens: 200
+  model_dir: "models/Vision" # optional, defaults to bundled path
+  camera:
+    enabled: true
+    camera_index: 0
+    capture_interval_seconds: 5
+    resolution: 384
+    scene_change_threshold: 0.05
+    max_tokens: 64
+  screen:
+    enabled: true
+    backend: "mss"
+    analyzer: "fastvlm"
+    model: "bartowski/Qwen_Qwen3.5-4B-GGUF:Q4_K_M"
+    completion_url: null
+    monitors: "all"
+    thumbnail_interval_seconds: 1
+    capture_interval_seconds: 5
+    resolution: 384
+    scene_change_threshold: 0.04
+    max_tokens: 128
 ```
 
-## Configuration Reference
+Legacy camera-only config is still supported:
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable vision module |
-| `model_dir` | string | `"models/Vision"` | Path to FastVLM ONNX models |
-| `camera_index` | int | `0` | Camera device index |
-| `capture_interval_seconds` | float | `5.0` | Time between frame captures |
-| `resolution` | int | `384` | Scene-change detection resolution |
-| `scene_change_threshold` | float | `0.05` | Minimum change to trigger inference (0=always, 1=never) |
-| `max_tokens` | int | `200` | Maximum tokens in background description |
-
-## Performance
-
-FastVLM provides **85x faster time-to-first-token** compared to Ollama-based VLMs:
-
-- **Direct ONNX inference** - no HTTP overhead
-- **Runs on CPU or CUDA** - GPU acceleration when available
-- **Small footprint** - ~640MB model files for 0.5B
-- **Frame differencing** - skips unchanged scenes
+```yaml
+vision:
+  camera_index: 0
+  capture_interval_seconds: 5
+```
 
 ## Context Injection
 
-The vision system maintains a single `[vision]` slot that's injected into the LLM context:
+The vision system maintains keyed snapshots:
 
-```
-[vision] A person sitting at a wooden desk with a laptop. There is a coffee mug
-to their left and a window showing daylight behind them.
-```
-
-This snapshot is updated whenever a new inference completes. The main agent sees the current scene in every request.
-
-## Detailed Lookups
-
-For specific visual questions (e.g., "What color is my shirt?"), the LLM can call the `vision_look` tool:
-
-```
-vision_look(prompt="Describe the person's clothing in detail")
+```text
+[vision:camera] A person is sitting at a desk with headphones.
+[vision:screen:monitor_1] VS Code is open with a terminal error.
+[vision:screen:monitor_2] A browser page with documentation is visible.
 ```
 
-This triggers:
-1. Fresh camera capture
-2. Custom VLM prompt for the specific question
-3. Detailed response returned to the LLM
+These are system-context messages. The main LLM should treat them as passive
+context, not user messages.
 
-Requires an LLM backend that supports tool calling.
+## Tools
 
-## VisionProcessor Thread
+Two separate tools are exposed when their sources are enabled:
 
-Vision runs in a separate thread alongside other processors:
+```text
+camera_look(prompt="Describe what the user is doing.")
+screen_look(prompt="Read the visible error.", monitor="1")
+```
 
-- **Captures frames** at `capture_interval_seconds`
-- **Compares frames** using the configured threshold
-- **Runs VLM inference** when scene changes detected
-- **Updates VisionState** with latest description
-- **Emits VisionUpdateEvent** to trigger autonomy
+`camera_look` captures a fresh webcam frame. `screen_look` captures fresh
+monitor screenshots. In normal chat, the LLM sees these tools only when the user
+asks a visual question. In autonomy, the LLM may call them only for high-value
+ambiguous visual events, then must finish with `speak` or `do_nothing`.
 
-The thread is fully async and doesn't block voice or text processing.
+## Screen Capture
+
+`screen.backend: "mss"` is the default because it is cross-platform and supports
+multiple monitors. `dxcam` is accepted as an optional Windows backend, but it
+must be installed separately.
+
+Screen vision currently uses FastVLM. The `screen.analyzer`,
+`screen.model`, and `screen.completion_url` fields reserve the integration
+point for a future OpenAI-compatible VLM server such as:
+
+```text
+bartowski/Qwen_Qwen3.5-4B-GGUF:Q4_K_M
+```
 
 ## Troubleshooting
 
-**Camera not opening:**
-- Check `camera_index` in config (try 0, 1, 2...)
-- Verify camera permissions
-- Test with: `ls /dev/video*` (Linux) or check System Preferences (macOS)
+Camera not opening:
+- Check `camera.camera_index` and try `0`, `1`, or `2`.
+- Verify camera permissions.
 
-**Models not found:**
-- Ensure models downloaded to `models/Vision/`
-- Check for `vision_encoder_fp16.onnx`, `embed_tokens_int8.onnx`, `decoder_model_merged_q4f16.onnx`
+Screen capture unavailable:
+- Install dependencies from `pyproject.toml`.
+- Keep `backend: "mss"` unless you explicitly installed `dxcam`.
+- For two monitors, use `monitors: "all"` or `monitors: [1, 2]`.
 
-**Slow inference:**
-- Increase `capture_interval_seconds`
-- Ensure CUDA available (`CUDAExecutionProvider`)
-- Raise `scene_change_threshold` (higher = fewer inferences)
-
-**Too many triggers:**
-- Increase `scene_change_threshold` (0.1 or higher)
-- The threshold is a normalized difference score - adjust based on your environment
-
-## Advanced
-
-### Custom Model Path
-
-```yaml
-vision:
-  model_dir: "/path/to/custom/fastvlm"
-```
-
-### Disable Vision
-
-Remove the entire `vision:` section from your config, or set:
-
-```yaml
-vision:
-  enabled: false
-```
+Poor screen reading:
+- FastVLM is useful for rough screen summaries, but small UI text/OCR may be weak.
+- The intended upgrade path is replacing screen analysis with a stronger VLM
+  endpoint while keeping the same `screen_look` tool contract.
 
 ## Implementation Details
 
 | Aspect | Value |
 |--------|-------|
-| **Model** | Apple FastVLM-0.5B (ONNX) |
-| **Precision** | fp16 + q4f16 mix |
-| **Architecture** | Vision encoder + text decoder |
-| **Input** | 1024x1024 RGB images (center-cropped) |
-| **Output** | Natural language scene descriptions |
-| **Backend** | ONNX Runtime (CPU/CUDA) |
-| **Integration** | Same ONNX patterns as ASR/TTS |
+| Camera source | `CameraVisionProcessor`, OpenCV `VideoCapture` |
+| Screen source | `ScreenVisionProcessor`, MSS or optional DXcam |
+| Default analyzer | FastVLM ONNX |
+| State format | Source-keyed `VisionState` snapshots |
+| Tools | `camera_look`, `screen_look` |
+| Main LLM requirement | Text-only is enough |
 
 ## See Also
 
-- [README](../README.md) - Full architecture diagram
-- [autonomy.md](./autonomy.md) - How vision triggers the autonomy loop
+- [autonomy.md](./autonomy.md) - How vision triggers autonomy
 - [vision_config.py](../src/glados/vision/vision_config.py) - Configuration source
-- [constants.py](../src/glados/vision/constants.py) - Vision system prompts
+- [constants.py](../src/glados/vision/constants.py) - Vision prompts

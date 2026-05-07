@@ -43,7 +43,10 @@ class VisionLook:
         """
         self.llm_queue = llm_queue
         tool_config = tool_config or {}
-        self._request_queue: queue.Queue[VisionRequest] | None = tool_config.get("vision_request_queue")
+        self._request_queue: queue.Queue[VisionRequest] | None = tool_config.get(
+            "camera_request_queue",
+            tool_config.get("vision_request_queue"),
+        )
         self._timeout = float(tool_config.get("vision_tool_timeout", 30.0))
         self._default_prompt = tool_config.get("vision_detail_prompt", VISION_DETAIL_PROMPT)
 

@@ -17,6 +17,8 @@ ToolEventCallback = Callable[[str, str], None]
 
 class ToolExecutor:
     """
+
+    _TERMINAL_AUTONOMY_TOOLS = {"speak", "do_nothing"}
     A thread that executes tool calls from the LLM.
     This class is designed to run in a separate thread, continuously checking
     for new tool calls until a shutdown event is set.
@@ -79,7 +81,12 @@ class ToolExecutor:
                 autonomy_flag = {"autonomy": True} if autonomy_mode else {}
                 base_queue = self.llm_queue_autonomy if autonomy_mode else self.llm_queue_priority
                 lane = "autonomy" if autonomy_mode else "priority"
-                llm_queue = self._wrap_llm_queue(base_queue, lane)
+                terminal_autonomy_tool = autonomy_mode and tool in self._TERMINAL_AUTONOMY_TOOLS
+                llm_queue = self._wrap_llm_queue(
+                    base_queue,
+                    lane,
+                    terminal_tool_result=terminal_autonomy_tool,
+                )
                 if self._observability_bus:
                     self._observability_bus.emit(
                         source="tool",
@@ -120,6 +127,7 @@ class ToolExecutor:
                                 "tool_call_id": tool_call_id,
                                 "content": tool_error,
                                 "type": "function_call_output",
+                                "_terminal_tool_result": terminal_autonomy_tool,
                                 **autonomy_flag,
                             },
                             lane=lane,
@@ -144,6 +152,7 @@ class ToolExecutor:
                                 "tool_call_id": tool_call_id,
                                 "content": str(result),
                                 "type": "function_call_output",
+                                "_terminal_tool_result": terminal_autonomy_tool,
                                 **autonomy_flag,
                             },
                             lane=lane,
@@ -167,6 +176,7 @@ class ToolExecutor:
                                 "tool_call_id": tool_call_id,
                                 "content": tool_error,
                                 "type": "function_call_output",
+                                "_terminal_tool_result": terminal_autonomy_tool,
                                 **autonomy_flag,
                             },
                             lane=lane,
@@ -211,6 +221,7 @@ class ToolExecutor:
                                     "tool_call_id": tool_call_id,
                                     "content": timeout_error,
                                     "type": "function_call_output",
+                                    "_terminal_tool_result": terminal_autonomy_tool,
                                     **autonomy_flag,
                                 },
                                 lane=lane,
@@ -233,6 +244,7 @@ class ToolExecutor:
                             "tool_call_id": tool_call_id,
                             "content": tool_error,
                             "type": "function_call_output",
+                            "_terminal_tool_result": terminal_autonomy_tool,
                             **autonomy_flag,
                         },
                         lane=lane,
@@ -245,7 +257,11 @@ class ToolExecutor:
         logger.info("ToolExecutor thread finished.")
 
     @staticmethod
-    def _wrap_llm_queue(llm_queue: queue.Queue[dict[str, Any]], lane: str) -> "queue.Queue[dict[str, Any]]":
+    def _wrap_llm_queue(
+        llm_queue: queue.Queue[dict[str, Any]],
+        lane: str,
+        terminal_tool_result: bool = False,
+    ) -> "queue.Queue[dict[str, Any]]":
         class ToolResultQueue:
             def __init__(self, base_queue: queue.Queue[dict[str, Any]]) -> None:
                 self._base_queue = base_queue
@@ -256,7 +272,13 @@ class ToolExecutor:
                 if "_enqueued_at" not in item:
                     item = {**item, "_enqueued_at": time.time(), "_lane": lane}
                 if item.get("role") == "tool" and "_allow_tools" not in item:
-                    item = {**item, "_allow_tools": False}
+                    allow_tools = (lane == "autonomy") and not terminal_tool_result
+                    item = {
+                        **item,
+                        "_allow_tools": allow_tools,
+                        "_terminal_tool_result": terminal_tool_result,
+                        "_finalize_autonomy_after_tool": allow_tools,
+                    }
                 try:
                     self._base_queue.put_nowait(item)
                 except queue.Full:
@@ -277,7 +299,13 @@ class ToolExecutor:
             if "_enqueued_at" not in item:
                 item = {**item, "_enqueued_at": time.time(), "_lane": lane}
             if item.get("role") == "tool" and "_allow_tools" not in item:
-                item = {**item, "_allow_tools": False}
+                terminal_tool_result = bool(item.get("_terminal_tool_result", False))
+                allow_tools = (lane == "autonomy") and not terminal_tool_result
+                item = {
+                    **item,
+                    "_allow_tools": allow_tools,
+                    "_finalize_autonomy_after_tool": allow_tools,
+                }
             target_queue.put_nowait(item)
         except queue.Full:
             logger.warning("ToolExecutor: dropped tool output because LLM queue is full.")

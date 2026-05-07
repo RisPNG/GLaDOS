@@ -244,10 +244,13 @@ class Glados:
         self.tool_timeout = tool_timeout
         self.mcp_servers = mcp_servers or []
         self._conversation_store = ConversationStore(initial_messages=list(personality_preprompt))
-        self.vision_config = vision_config
+        self.vision_config = vision_config if vision_config and vision_config.is_enabled() else None
+        self.vision_sources = self.vision_config.enabled_sources() if self.vision_config else set()
         self.autonomy_config = autonomy_config or AutonomyConfig()
-        self.vision_state: VisionState | None = VisionState() if self.vision_config else None
-        self.vision_request_queue: queue.Queue | None = queue.Queue() if self.vision_config else None
+        self.vision_state: VisionState | None = VisionState() if self.vision_sources else None
+        self.camera_request_queue: queue.Queue | None = queue.Queue() if "camera" in self.vision_sources else None
+        self.screen_request_queue: queue.Queue | None = queue.Queue() if "screen" in self.vision_sources else None
+        self.vision_request_queue: queue.Queue | None = self.camera_request_queue
         self.autonomy_event_bus: EventBus | None = None
         self.autonomy_loop: AutonomyLoop | None = None
         self.autonomy_slots: TaskSlotStore | None = None
@@ -416,6 +419,7 @@ class Glados:
             observability_bus=self.observability_bus,
             extra_headers=llm_headers,
             lane="priority",
+            vision_sources=self.vision_sources,
         )
         self.autonomy_llm_processors: list[LanguageModelProcessor] = []
         autonomy_parallel_calls = 0
@@ -445,6 +449,7 @@ class Glados:
                     extra_headers=llm_headers,
                     lane="autonomy",
                     inflight_counter=self._autonomy_inflight,
+                    vision_sources=self.vision_sources,
                 )
             )
 
@@ -457,6 +462,8 @@ class Glados:
             tool_config={
                 **self.tool_config,
                 "vision_request_queue": self.vision_request_queue,
+                "camera_request_queue": self.camera_request_queue,
+                "screen_request_queue": self.screen_request_queue,
                 "vision_tool_timeout": self.tool_timeout,
                 "tts_queue": self.tts_queue,
                 "preferences_store": self.preferences_store,
@@ -495,17 +502,52 @@ class Glados:
         )
 
         self.vision_processor = None
+        self.camera_vision_processor = None
+        self.screen_vision_processor = None
+        self._vision_model = None
         if self.vision_config:
-            from ..vision import VisionProcessor
-            self.vision_processor = VisionProcessor(
-                vision_state=self.vision_state,
-                processing_active_event=self.processing_active_event,
-                shutdown_event=self.shutdown_event,
-                config=self.vision_config,
-                request_queue=self.vision_request_queue,
-                event_bus=self.autonomy_event_bus,
-                observability_bus=self.observability_bus,
-            )
+            needs_fastvlm = "camera" in self.vision_sources
+            if self.vision_config.screen and self.vision_config.screen.enabled:
+                needs_fastvlm = needs_fastvlm or self.vision_config.screen.analyzer == "fastvlm"
+            if needs_fastvlm:
+                from ..vision import FastVLM
+
+                self._vision_model = FastVLM(self.vision_config.model_dir)
+
+            if "camera" in self.vision_sources:
+                from ..vision import CameraVisionProcessor
+
+                assert self.vision_state is not None
+                assert self.vision_config.camera is not None
+                self.camera_vision_processor = CameraVisionProcessor(
+                    vision_state=self.vision_state,
+                    processing_active_event=self.processing_active_event,
+                    shutdown_event=self.shutdown_event,
+                    config=self.vision_config.camera,
+                    model_dir=self.vision_config.model_dir,
+                    model=self._vision_model,
+                    request_queue=self.camera_request_queue,
+                    event_bus=self.autonomy_event_bus,
+                    observability_bus=self.observability_bus,
+                )
+                self.vision_processor = self.camera_vision_processor
+
+            if "screen" in self.vision_sources:
+                from ..vision import ScreenVisionProcessor
+
+                assert self.vision_state is not None
+                assert self.vision_config.screen is not None
+                self.screen_vision_processor = ScreenVisionProcessor(
+                    vision_state=self.vision_state,
+                    processing_active_event=self.processing_active_event,
+                    shutdown_event=self.shutdown_event,
+                    config=self.vision_config.screen,
+                    model_dir=self.vision_config.model_dir,
+                    model=self._vision_model,
+                    request_queue=self.screen_request_queue,
+                    event_bus=self.autonomy_event_bus,
+                    observability_bus=self.observability_bus,
+                )
 
         self.autonomy_ticker_thread: threading.Thread | None = None
         if self.autonomy_config.enabled:
@@ -592,12 +634,19 @@ class Glados:
                 ShutdownPriority.BACKGROUND,
                 None,
             )
-        if self.vision_processor:
-            thread_configs["VisionProcessor"] = (
-                self.vision_processor.run,
+        if self.camera_vision_processor:
+            thread_configs["CameraVisionProcessor"] = (
+                self.camera_vision_processor.run,
                 True,  # Can safely abandon
                 ShutdownPriority.BACKGROUND,
-                self.vision_request_queue,
+                self.camera_request_queue,
+            )
+        if self.screen_vision_processor:
+            thread_configs["ScreenVisionProcessor"] = (
+                self.screen_vision_processor.run,
+                True,  # Can safely abandon
+                ShutdownPriority.BACKGROUND,
+                self.screen_request_queue,
             )
         if self.autonomy_ticker_thread:
             self.component_threads.append(self.autonomy_ticker_thread)

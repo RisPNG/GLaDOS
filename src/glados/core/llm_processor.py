@@ -67,6 +67,7 @@ class LanguageModelProcessor:
         extra_headers: dict[str, str] | None = None,
         lane: str = "priority",
         inflight_counter: InFlightCounter | None = None,
+        vision_sources: set[str] | None = None,
     ) -> None:
         self.llm_input_queue = llm_input_queue
         self.tool_calls_queue = tool_calls_queue
@@ -88,6 +89,7 @@ class LanguageModelProcessor:
         self._observability_bus = observability_bus
         self._lane = lane
         self._inflight_counter = inflight_counter
+        self.vision_sources = vision_sources or set()
         self._ollama_mode = self._is_ollama_endpoint()
 
         self.prompt_headers = {"Content-Type": "application/json"}
@@ -368,9 +370,70 @@ class LanguageModelProcessor:
             )
         )
         wants_clap = "clap" in text
+        visual_terms = (
+            "look",
+            "vision",
+            "visual",
+            "image",
+            "camera",
+            "webcam",
+            "screen",
+            "monitor",
+            "window",
+            "desktop",
+        )
+        wants_visual = any(term in text for term in visual_terms) or any(
+            phrase in text
+            for phrase in (
+                "what do you see",
+                "do you see",
+                "can you see",
+                "see this",
+                "see that",
+            )
+        )
+        wants_camera = wants_visual and any(
+            phrase in text
+            for phrase in (
+                "camera",
+                "webcam",
+                "room",
+                "behind me",
+                "around me",
+                "what am i wearing",
+                "do i look",
+                "look at me",
+                "see me",
+            )
+        )
+        wants_screen = wants_visual and any(
+            phrase in text
+            for phrase in (
+                "screen",
+                "monitor",
+                "desktop",
+                "window",
+                "app",
+                "browser",
+                "terminal",
+                "vscode",
+                "vs code",
+                "error",
+                "page",
+                "what i'm looking at",
+                "what i am looking at",
+            )
+        )
+        if wants_visual and not wants_camera and not wants_screen:
+            wants_camera = "camera" in self.vision_sources
+            wants_screen = "screen" in self.vision_sources
         filtered: list[dict[str, Any]] = []
         for tool in tools:
             name = tool.get("function", {}).get("name", "")
+            if name == "camera_look" and not wants_camera:
+                continue
+            if name == "screen_look" and not wants_screen:
+                continue
             if name == "set_preference" and not wants_preference_set:
                 continue
             if name == "get_preferences" and not wants_preference_get:
@@ -631,7 +694,7 @@ class LanguageModelProcessor:
                     extra_messages.append({"role": "system", "content": modifiers_prompt})
 
         # MCP context is handled separately (returns list of messages)
-        if self.mcp_manager:
+        if self.mcp_manager and not finalize_after_tool:
             try:
                 extra_messages.extend(self.mcp_manager.get_context_messages(block=False))
             except Exception as e:
@@ -652,21 +715,32 @@ class LanguageModelProcessor:
 
         return messages
 
-    def _build_tools(self, autonomy_mode: bool) -> list[dict[str, Any]]:
+    def _build_tools(self, autonomy_mode: bool, finalize_after_tool: bool = False) -> list[dict[str, Any]]:
         """Return the tool list for the LLM request."""
         tools = list(tool_definitions)
-        if self.vision_state is None:
-            tools = [tool for tool in tools if tool.get("function", {}).get("name") != "vision_look"]
+        if "camera" not in self.vision_sources:
+            tools = [
+                tool
+                for tool in tools
+                if tool.get("function", {}).get("name") not in {"camera_look", "vision_look"}
+            ]
+        if "screen" not in self.vision_sources:
+            tools = [tool for tool in tools if tool.get("function", {}).get("name") != "screen_look"]
         if not self._has_reportable_slots():
             tools = [tool for tool in tools if tool.get("function", {}).get("name") != "get_report"]
+        if autonomy_mode and finalize_after_tool:
+            tools = [
+                tool
+                for tool in tools
+                if tool.get("function", {}).get("name") in {"speak", "do_nothing"}
+            ]
         if not autonomy_mode:
             tools = [
                 tool
                 for tool in tools
                 if tool.get("function", {}).get("name") not in {"speak", "do_nothing"}
             ]
-            tools = [tool for tool in tools if tool.get("function", {}).get("name") != "vision_look"]
-        if self.mcp_manager:
+        if self.mcp_manager and not finalize_after_tool:
             try:
                 tools.extend(self.mcp_manager.get_tool_definitions())
             except Exception as e:
@@ -708,7 +782,7 @@ class LanguageModelProcessor:
                     for key, value in llm_input.items()
                     if key != "autonomy" and not key.startswith("_")
                 }
-                if autonomy_mode and llm_message.get("role") == "tool":
+                if autonomy_mode and llm_message.get("role") == "tool" and llm_input.get("_terminal_tool_result"):
                     logger.debug("LLM Processor: Dropping terminal autonomy tool result.")
                     continue
                 logger.info(f"LLM Processor: Received input for LLM: '{llm_message}'")
@@ -740,7 +814,8 @@ class LanguageModelProcessor:
                     self._conversation_store.append(llm_message)
 
                 allow_tools = bool(llm_input.get("_allow_tools", True))
-                tools = self._build_tools(autonomy_mode) if allow_tools else []
+                finalize_after_tool = bool(llm_input.get("_finalize_autonomy_after_tool", False))
+                tools = self._build_tools(autonomy_mode, finalize_after_tool=finalize_after_tool) if allow_tools else []
                 if tools and not autonomy_mode and llm_message.get("role") == "user":
                     content = str(llm_message.get("content", ""))
                     tools = self._filter_tools_for_message(tools, content)

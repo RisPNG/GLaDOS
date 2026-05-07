@@ -7,12 +7,15 @@ from glados.autonomy.slots import TaskSlotStore
 from glados.core.context import ContextBuilder, SessionClockContext, format_current_time_context
 from glados.core.conversation_store import ConversationStore
 from glados.core.llm_processor import LanguageModelProcessor
+from glados.vision.vision_state import VisionState
 
 
 def _processor(
     slot_store: TaskSlotStore | None = None,
     context_builder: ContextBuilder | None = None,
+    vision_sources: set[str] | None = None,
 ) -> LanguageModelProcessor:
+    vision_state = VisionState() if vision_sources else None
     return LanguageModelProcessor(
         llm_input_queue=queue.Queue(),
         tool_calls_queue=queue.Queue(),
@@ -23,8 +26,10 @@ def _processor(
         api_key=None,
         processing_active_event=threading.Event(),
         shutdown_event=threading.Event(),
+        vision_state=vision_state,
         slot_store=slot_store,
         context_builder=context_builder,
+        vision_sources=vision_sources,
     )
 
 
@@ -97,6 +102,33 @@ def test_get_preferences_visible_for_explicit_memory_request() -> None:
     assert "get_preferences" in _tool_names(tools)
 
 
+def test_visual_tools_are_source_gated() -> None:
+    names = _tool_names(_processor(vision_sources={"camera"})._build_tools(autonomy_mode=False))
+
+    assert "camera_look" in names
+    assert "screen_look" not in names
+
+
+def test_screen_tool_visible_for_screen_question() -> None:
+    processor = _processor(vision_sources={"screen"})
+    tools = processor._filter_tools_for_message(
+        processor._build_tools(autonomy_mode=False),
+        "What error is on my screen?",
+    )
+
+    assert "screen_look" in _tool_names(tools)
+
+
+def test_camera_tool_visible_for_camera_question() -> None:
+    processor = _processor(vision_sources={"camera"})
+    tools = processor._filter_tools_for_message(
+        processor._build_tools(autonomy_mode=False),
+        "What do I look like on camera?",
+    )
+
+    assert "camera_look" in _tool_names(tools)
+
+
 def test_priority_messages_include_registered_time_context() -> None:
     builder = ContextBuilder()
     builder.register("time", lambda: format_current_time_context())
@@ -147,6 +179,7 @@ def test_autonomy_tool_result_does_not_trigger_followup_llm_call(mocker) -> None
             "type": "function_call_output",
             "autonomy": True,
             "_allow_tools": False,
+            "_terminal_tool_result": True,
         }
     )
 

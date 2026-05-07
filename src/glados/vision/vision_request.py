@@ -11,3 +11,4 @@ class VisionRequest:
     prompt: str
     max_tokens: int
     response_queue: queue.Queue[str]
+    monitor: int | None = None

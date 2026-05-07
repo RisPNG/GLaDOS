@@ -1,8 +1,9 @@
-"""Vision processor that periodically captures camera frames and generates scene descriptions using FastVLM."""
+"""Camera vision processor that captures webcam frames and generates scene descriptions using FastVLM."""
 
 from __future__ import annotations
 
 import queue
+from pathlib import Path
 import threading
 import time
 
@@ -14,22 +15,24 @@ from numpy.typing import NDArray
 from ..autonomy import EventBus
 from ..autonomy.events import VisionUpdateEvent
 from ..observability import ObservabilityBus, trim_message
-from .constants import VISION_DEFAULT_PROMPT
+from .constants import CAMERA_DEFAULT_PROMPT
 from .fastvlm import FastVLM
-from .vision_config import VisionConfig
+from .vision_config import CameraVisionConfig
 from .vision_request import VisionRequest
 from .vision_state import VisionState
 
 
-class VisionProcessor:
-    """Periodically captures camera frames and updates a vision snapshot using local ONNX FastVLM."""
+class CameraVisionProcessor:
+    """Periodically captures webcam frames and updates a camera vision snapshot using local ONNX FastVLM."""
 
     def __init__(
         self,
         vision_state: VisionState,
         processing_active_event: threading.Event,
         shutdown_event: threading.Event,
-        config: VisionConfig,
+        config: CameraVisionConfig,
+        model_dir: Path | None = None,
+        model: FastVLM | None = None,
         request_queue: queue.Queue[VisionRequest] | None = None,
         event_bus: EventBus | None = None,
         observability_bus: ObservabilityBus | None = None,
@@ -41,6 +44,8 @@ class VisionProcessor:
             processing_active_event: Event indicating if processing is active
             shutdown_event: Event to signal shutdown
             config: Vision module configuration
+            model_dir: Optional shared FastVLM model directory
+            model: Optional shared FastVLM instance
             request_queue: Queue for on-demand tool requests
         """
         self.vision_state = vision_state
@@ -52,7 +57,7 @@ class VisionProcessor:
         self._observability_bus = observability_bus
 
         # Load FastVLM model
-        self._model = FastVLM(config.model_dir)
+        self._model = model or FastVLM(model_dir)
 
         # Camera capture
         self._capture: cv2.VideoCapture | None = None
@@ -66,7 +71,7 @@ class VisionProcessor:
 
     def run(self) -> None:
         """Main processing loop for the vision processor thread."""
-        logger.info("VisionProcessor thread started.")
+        logger.info("CameraVisionProcessor thread started.")
         try:
             while not self.shutdown_event.is_set():
                 loop_started = time.perf_counter()
@@ -91,7 +96,7 @@ class VisionProcessor:
 
                 # Skip if scene hasn't changed significantly
                 if self._last_frame is not None and change_score <= self.config.scene_change_threshold:
-                    logger.debug("VisionProcessor: Scene unchanged, skipping VLM inference.")
+                    logger.debug("CameraVisionProcessor: Scene unchanged, skipping VLM inference.")
                     self._sleep(loop_started)
                     continue
 
@@ -100,22 +105,22 @@ class VisionProcessor:
                 self._prompt_cache.clear()
 
                 # Get scene description using local ONNX model
-                description = self._get_description(frame, prompt=VISION_DEFAULT_PROMPT, max_tokens=self.config.max_tokens)
+                description = self._get_description(frame, prompt=CAMERA_DEFAULT_PROMPT, max_tokens=self.config.max_tokens)
 
                 if description:
-                    self.vision_state.update(description)
-                    logger.success("Vision snapshot updated: {}", description)
+                    self.vision_state.update(description, source="camera")
+                    logger.success("Camera vision snapshot updated: {}", description)
                     self._publish_update(description, change_score)
                     self._last_description = description
 
                 self._sleep(loop_started)
 
         except Exception as ex:
-            logger.exception("VisionProcessor uncaught exception: {}", ex)
+            logger.exception("CameraVisionProcessor uncaught exception: {}", ex)
         finally:
             if self._capture is not None:
                 self._capture.release()
-            logger.info("VisionProcessor thread finished.")
+            logger.info("CameraVisionProcessor thread finished.")
 
     def _ensure_capture_ready(self) -> bool:
         """Ensure camera capture is ready.
@@ -132,13 +137,13 @@ class VisionProcessor:
         self._capture = cv2.VideoCapture(self.config.camera_index)
         if not self._capture.isOpened():
             logger.error(
-                "VisionProcessor: Unable to open camera index {}. Retrying in {:.1f}s.",
+                "CameraVisionProcessor: Unable to open camera index {}. Retrying in {:.1f}s.",
                 self.config.camera_index,
                 self.config.capture_interval_seconds,
             )
             return False
 
-        logger.success("VisionProcessor: Camera {} opened successfully.", self.config.camera_index)
+        logger.success("CameraVisionProcessor: Camera {} opened successfully.", self.config.camera_index)
         return True
 
     def _grab_frame(self) -> NDArray[np.uint8] | None:
@@ -150,7 +155,7 @@ class VisionProcessor:
         assert self._capture is not None
         ret, frame = self._capture.read()
         if not ret or frame is None:
-            logger.warning("VisionProcessor: Failed to capture frame from camera {}.", self.config.camera_index)
+            logger.warning("CameraVisionProcessor: Failed to capture frame from camera {}.", self.config.camera_index)
             return None
         return frame
 
@@ -252,7 +257,7 @@ class VisionProcessor:
         reuse_cached = self._last_features is not None and change_score <= self.config.scene_change_threshold
 
         if reuse_cached:
-            logger.debug("VisionProcessor: Reusing cached vision features for tool request.")
+            logger.debug("CameraVisionProcessor: Reusing cached vision features for tool request.")
             prompt = request.prompt.strip() if request.prompt else ""
             cache_key = (prompt, int(request.max_tokens))
             description = self._prompt_cache.get(cache_key)
@@ -298,12 +303,16 @@ class VisionProcessor:
                     prev_description=self._last_description,
                     change_score=change_score,
                     captured_at=time.time(),
+                    source="camera",
                 )
             )
         if self._observability_bus:
             self._observability_bus.emit(
-                source="vision",
+                source="vision.camera",
                 kind="update",
                 message=trim_message(description),
                 meta={"change_score": round(change_score, 4)},
             )
+
+
+VisionProcessor = CameraVisionProcessor

@@ -7,6 +7,8 @@ class VisionUpdateEvent:
     prev_description: str | None
     change_score: float
     captured_at: float
+    source: str = "camera"
+    key: str | None = None
 
 
 @dataclass(frozen=True)

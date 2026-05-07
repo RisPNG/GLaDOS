@@ -138,9 +138,13 @@ class AutonomyLoop:
 
         if isinstance(event, VisionUpdateEvent):
             prev_scene = event.prev_description or "unknown"
-            scene = event.description
+            event_label = event.source if event.key is None else f"{event.source}:{event.key}"
+            scene = f"{event_label}: {event.description}"
+            all_scene = self._current_scene()
+            if all_scene and all_scene != event.description:
+                scene = f"{scene}\nAll current visual context:\n{all_scene}"
             change_score = f"{event.change_score:.4f}"
-            self._last_scene = event.description
+            self._last_scene = scene
             # Push vision event to emotion agent if change is significant
             if self._emotion_agent and event.change_score >= self.VISION_EMOTION_THRESHOLD:
                 self._push_vision_emotion(event)
@@ -226,11 +230,14 @@ class AutonomyLoop:
         """Push a vision-related emotion event."""
         # Describe the scene change for emotional processing
         if event.prev_description and event.description:
-            description = f"Scene changed from '{event.prev_description}' to '{event.description}' (change={event.change_score:.2f})"
+            description = (
+                f"{event.source} scene changed from '{event.prev_description}' to "
+                f"'{event.description}' (change={event.change_score:.2f})"
+            )
         elif event.description:
-            description = f"New scene observed: '{event.description}'"
+            description = f"New {event.source} scene observed: '{event.description}'"
         else:
-            description = f"Scene change detected (change={event.change_score:.2f})"
+            description = f"{event.source} scene change detected (change={event.change_score:.2f})"
 
         emotion_event = EmotionEvent(
             source="vision",
